@@ -1,6 +1,6 @@
 VERBOSE: False
 BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/pick.yaml
-TRAINER_NAME: "ddppo"
+TRAINER_NAME: "transformer"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
@@ -26,14 +26,9 @@ GYM_AUTO_NAME: "Pick"
 
 RL:
 
-  TRANSFORMER:
-    COLLECT_DATA_DIR: "data/collected_data"
-
-
-
 
   POLICY:
-      name: "PointNavResNetPolicy"
+      name: "TransformerResNetPolicy"
       action_distribution_type: "gaussian"
 
   REWARD_MEASURE: "rearrangepick_reward"
@@ -42,20 +37,17 @@ RL:
   SLACK_REWARD: -0.01
   GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position']
 
-  PPO:
-    # ppo params
-    clip_param: 0.2
-    ppo_epoch: 2
+  TRAJECTORY_DATASET:
+  
+
+  TRANSFORMER:
+    return_to_go: 1
     num_mini_batch: 2
-    value_loss_coef: 0.5
-    entropy_coef: 0.01
-    lr: 2.5e-4
-    eps: 1e-5
-    max_grad_norm: 0.2
-    num_steps: 128
-    use_gae: True
-    gamma: 0.99
-    tau: 0.95
+    context_length: 30
+    max_episode_step: 200
+    model_type: "reward_conditioned"
+    n_head: 8
+    n_layer: 6
     use_linear_clip_decay: False
     use_linear_lr_decay: False
     reward_window_size: 50
@@ -69,7 +61,6 @@ RL:
     # policy inference time during rollout generation
     use_double_buffered_sampler: False
 
-  DDPPO:
     sync_frac: 0.6
     # The PyTorch distributed backend to use
     distrib_backend: NCCL
@@ -81,10 +72,6 @@ RL:
     pretrained_encoder: False
     # Whether or not the visual encoder backbone will be trained.
     train_encoder: True
-    # Whether or not to reset the critic linear layer
-    reset_critic: True
 
     # Model parameters
     backbone: resnet50
-    rnn_type: LSTM
-    num_recurrent_layers: 2
