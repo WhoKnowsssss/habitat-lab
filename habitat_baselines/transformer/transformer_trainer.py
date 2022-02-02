@@ -17,6 +17,10 @@ import tqdm
 from gym import spaces
 from torch import device, nn
 from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import (
+    DataLoader,
+    DistributedSampler
+)
 
 from habitat import Config, VectorEnv, logger
 from habitat.utils import profiling_wrapper
@@ -49,8 +53,11 @@ from habitat_baselines.rl.ddppo.ddp_utils import (
 from habitat_baselines.rl.ddppo.policy import (  # noqa: F401.
     PointNavResNetPolicy,
 )
-from habitat_baselines.transformer.policy import TransformerResNetPolicy
-from habitat_baselines.transformer.policy import Policy
+from habitat_baselines.transformer.policy import (
+    TransformerResNetPolicy,
+    Policy,
+)
+from habitat_baselines.transformer.dataset import StateActionReturnDataset
 from habitat_baselines.utils.common import (
     ObservationBatchingCache,
     action_array_to_dict,
@@ -200,7 +207,7 @@ class TransformerTrainer(BaseRLTrainer):
 
         if self._is_distributed:
             local_rank, tcp_store = init_distrib_slurm(
-                self.config.RL.DDPPO.distrib_backend
+                self.config.RL.TRANSFORMER.distrib_backend
             )
             if rank0_only():
                 logger.info(
@@ -229,32 +236,7 @@ class TransformerTrainer(BaseRLTrainer):
         if rank0_only() and self.config.VERBOSE:
             logger.info(f"config: {self.config}")
 
-        profiling_wrapper.configure(
-            capture_start_step=self.config.PROFILING.CAPTURE_START_STEP,
-            num_steps_to_capture=self.config.PROFILING.NUM_STEPS_TO_CAPTURE,
-        )
-
-        self._init_envs()
-
-        action_space = self.envs.action_spaces[0]
-        if self.using_velocity_ctrl:
-            # For navigation using a continuous action space for a task that
-            # may be asking for discrete actions
-            self.policy_action_space = action_space["VELOCITY_CONTROL"]
-            action_shape = (2,)
-            discrete_actions = False
-        else:
-            self.policy_action_space = action_space
-            if is_continuous_action_space(action_space):
-                # Assume ALL actions are NOT discrete
-                action_shape = (get_num_actions(action_space),)
-                discrete_actions = False
-            else:
-                # For discrete pointnav
-                action_shape = None
-                discrete_actions = True
-
-        ppo_cfg = self.config.RL.PPO
+        
         if torch.cuda.is_available():
             self.device = torch.device("cuda", self.config.TORCH_GPU_ID)
             torch.cuda.set_device(self.device)
@@ -264,9 +246,8 @@ class TransformerTrainer(BaseRLTrainer):
         if rank0_only() and not os.path.isdir(self.config.CHECKPOINT_FOLDER):
             os.makedirs(self.config.CHECKPOINT_FOLDER)
 
-        self._init_model(ppo_cfg)
         if self._is_distributed:
-            self.agent.init_distributed(find_unused_params=True)
+            self.init_distributed(find_unused_params=True)
 
         logger.info(
             "agent number of parameters: {}".format(
@@ -274,60 +255,79 @@ class TransformerTrainer(BaseRLTrainer):
             )
         )
 
-        obs_space = self.obs_space
-        if self._static_encoder:
-            self._encoder = self.actor_critic.net.visual_encoder
-            obs_space = spaces.Dict(
-                {
-                    "visual_features": spaces.Box(
-                        low=np.finfo(np.float32).min,
-                        high=np.finfo(np.float32).max,
-                        shape=self._encoder.output_shape,
-                        dtype=np.float32,
-                    ),
-                    **obs_space.spaces,
-                }
-            )
+        self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET)
+        self.sampler = None
+        if self._is_distributed:
+            self.sampler = DistributedSampler(self.train_dataset,
+                                num_replicas=torch.distributed.get_world_size(),
+                                rank=local_rank,
+                                shuffle=True,
+                                seed=self.config.TASK_CONFIG.SEED
+                            )
+        self.train_loader = DataLoader(self.train_dataset, shuffle=True, pin_memory=True,
+                                batch_size=self.config.BATCH_SIZE,
+                                num_workers=self.config.NUM_WORKERS, 
+                                sampler=self.sampler
+                            )
 
-        self._nbuffers = 2 if ppo_cfg.use_double_buffered_sampler else 1
-
-        self.rollouts = RolloutStorage(
-            ppo_cfg.num_steps,
-            self.envs.num_envs,
-            obs_space,
-            self.policy_action_space,
-            ppo_cfg.hidden_size,
-            num_recurrent_layers=self.actor_critic.net.num_recurrent_layers,
-            is_double_buffered=ppo_cfg.use_double_buffered_sampler,
-            action_shape=action_shape,
-            discrete_actions=discrete_actions,
+        self.optimizer = torch.nn.optim.Adam(
+            list(filter(lambda p: p.requires_grad, self.transformer_policy.parameters())),
+            lr=self.config.RL.TRANSFORMER.lr,
+            eps=self.config.RL.TRANSFORMER.eps,
         )
-        self.rollouts.to(self.device)
 
-        observations = self.envs.reset()
-        batch = batch_obs(
-            observations, device=self.device, cache=self._obs_batching_cache
-        )
-        batch = apply_obs_transforms_batch(batch, self.obs_transforms)
-
-        if self._static_encoder:
-            with torch.no_grad():
-                batch["visual_features"] = self._encoder(batch)
-
-        self.rollouts.buffers["observations"][0] = batch
-
-        self.current_episode_reward = torch.zeros(self.envs.num_envs, 1)
-        self.running_episode_stats = dict(
-            count=torch.zeros(self.envs.num_envs, 1),
-            reward=torch.zeros(self.envs.num_envs, 1),
-        )
-        self.window_episode_stats = defaultdict(
-            lambda: deque(maxlen=ppo_cfg.reward_window_size)
-        )
 
         self.env_time = 0.0
         self.pth_time = 0.0
         self.t_start = time.time()
+
+    def init_distributed(self, find_unused_params: bool = True) -> None:
+        r"""Initializes distributed training for the model
+
+        1. Broadcasts the model weights from world_rank 0 to all other workers
+        2. Adds gradient hooks to the model
+
+        :param find_unused_params: Whether or not to filter out unused parameters
+                                   before gradient reduction.  This *must* be True if
+                                   there are any parameters in the model that where unused in the
+                                   forward pass, otherwise the gradient reduction
+                                   will not work correctly.
+        """
+        class _EvalActionsWrapper(torch.nn.Module):
+            r"""Wrapper on evaluate_actions that allows that to be called from forward.
+            This is needed to interface with DistributedDataParallel's forward call
+            """
+
+            def __init__(self, transformer_policy):
+                super().__init__()
+                self.transformer_policy = transformer_policy
+
+            def forward(self, *args, **kwargs):
+                return self.transformer_policy.evaluate_actions(*args, **kwargs)
+        
+        # NB: Used to hide the hooks from the nn.Module,
+        # so they don't show up in the state_dict
+        class Guard:  # noqa: SIM119
+            def __init__(self, model, device):
+                if torch.cuda.is_available():
+                    self.ddp = torch.nn.parallel.DistributedDataParallel(
+                        model,
+                        device_ids=[device],
+                        output_device=device,
+                        find_unused_parameters=find_unused_params,
+                    )
+                else:
+                    self.ddp = torch.nn.parallel.DistributedDataParallel(
+                        model,
+                        find_unused_parameters=find_unused_params,
+                    )
+
+            def __call__(self, observations, rnn_hidden_states, prev_actions, masks, action):
+                return self.ddp(observations, rnn_hidden_states, prev_actions, masks, action)
+
+        self._evaluate_actions_wrapper = Guard(_EvalActionsWrapper(self.transformer_policy), self.device)  # type: ignore
+
+        # Question on this!! 
 
     @rank0_only
     @profiling_wrapper.RangeContext("save_checkpoint")
@@ -343,7 +343,7 @@ class TransformerTrainer(BaseRLTrainer):
             None
         """
         checkpoint = {
-            "state_dict": self.agent.state_dict(),
+            "state_dict": self.transformer_policy.state_dict(),
             "config": self.config,
         }
         if extra_state is not None:
@@ -469,156 +469,6 @@ class TransformerTrainer(BaseRLTrainer):
             buffer_index=buffer_index,
         )
 
-    def _collect_environment_result(self, buffer_index: int = 0):
-        num_envs = self.envs.num_envs
-        env_slice = slice(
-            int(buffer_index * num_envs / self._nbuffers),
-            int((buffer_index + 1) * num_envs / self._nbuffers),
-        )
-
-        t_step_env = time.time()
-        outputs = [
-            self.envs.wait_step_at(index_env)
-            for index_env in range(env_slice.start, env_slice.stop)
-        ]
-
-        observations, rewards_l, dones, infos = [
-            list(x) for x in zip(*outputs)
-        ]
-
-        self.env_time += time.time() - t_step_env
-
-        t_update_stats = time.time()
-        batch = batch_obs(
-            observations, device=self.device, cache=self._obs_batching_cache
-        )
-        batch = apply_obs_transforms_batch(batch, self.obs_transforms)
-
-        rewards = torch.tensor(
-            rewards_l,
-            dtype=torch.float,
-            device=self.current_episode_reward.device,
-        )
-        rewards = rewards.unsqueeze(1)
-
-        not_done_masks = torch.tensor(
-            [[not done] for done in dones],
-            dtype=torch.bool,
-            device=self.current_episode_reward.device,
-        )
-        done_masks = torch.logical_not(not_done_masks)
-
-        self.current_episode_reward[env_slice] += rewards
-        current_ep_reward = self.current_episode_reward[env_slice]
-        self.running_episode_stats["reward"][env_slice] += current_ep_reward.where(done_masks, current_ep_reward.new_zeros(()))  # type: ignore
-        self.running_episode_stats["count"][env_slice] += done_masks.float()  # type: ignore
-        for k, v_k in self._extract_scalars_from_infos(infos).items():
-            v = torch.tensor(
-                v_k,
-                dtype=torch.float,
-                device=self.current_episode_reward.device,
-            ).unsqueeze(1)
-            if k not in self.running_episode_stats:
-                self.running_episode_stats[k] = torch.zeros_like(
-                    self.running_episode_stats["count"]
-                )
-
-            self.running_episode_stats[k][env_slice] += v.where(done_masks, v.new_zeros(()))  # type: ignore
-
-        self.current_episode_reward[env_slice].masked_fill_(done_masks, 0.0)
-
-        if self._static_encoder:
-            with torch.no_grad():
-                batch["visual_features"] = self._encoder(batch)
-
-        self.rollouts.insert(
-            next_observations=batch,
-            rewards=rewards,
-            next_masks=not_done_masks,
-            buffer_index=buffer_index,
-        )
-
-        self.rollouts.advance_rollout(buffer_index)
-
-        self.pth_time += time.time() - t_update_stats
-
-        return env_slice.stop - env_slice.start
-
-    @profiling_wrapper.RangeContext("_collect_rollout_step")
-    def _collect_rollout_step(self):
-        self._compute_actions_and_step_envs()
-        return self._collect_environment_result()
-
-    @profiling_wrapper.RangeContext("_update_agent")
-    def _update_agent(self):
-        ppo_cfg = self.config.RL.PPO
-        t_update_model = time.time()
-        with torch.no_grad():
-            step_batch = self.rollouts.buffers[
-                self.rollouts.current_rollout_step_idx
-            ]
-
-            next_value = self.actor_critic.get_value(
-                step_batch["observations"],
-                step_batch["recurrent_hidden_states"],
-                step_batch["prev_actions"],
-                step_batch["masks"],
-            )
-
-        self.rollouts.compute_returns(
-            next_value, ppo_cfg.use_gae, ppo_cfg.gamma, ppo_cfg.tau
-        )
-
-        self.agent.train()
-
-        value_loss, action_loss, dist_entropy = self.agent.update(
-            self.rollouts
-        )
-
-        self.rollouts.after_update()
-        self.pth_time += time.time() - t_update_model
-
-        return (
-            value_loss,
-            action_loss,
-            dist_entropy,
-        )
-
-    def _coalesce_post_step(
-        self, losses: Dict[str, float], count_steps_delta: int
-    ) -> Dict[str, float]:
-        stats_ordering = sorted(self.running_episode_stats.keys())
-        stats = torch.stack(
-            [self.running_episode_stats[k] for k in stats_ordering], 0
-        )
-
-        stats = self._all_reduce(stats)
-
-        for i, k in enumerate(stats_ordering):
-            self.window_episode_stats[k].append(stats[i])
-
-        if self._is_distributed:
-            loss_name_ordering = sorted(losses.keys())
-            stats = torch.tensor(
-                [losses[k] for k in loss_name_ordering] + [count_steps_delta],
-                device="cpu",
-                dtype=torch.float32,
-            )
-            stats = self._all_reduce(stats)
-            count_steps_delta = int(stats[-1].item())
-            stats /= torch.distributed.get_world_size()
-
-            losses = {
-                k: stats[i].item() for i, k in enumerate(loss_name_ordering)
-            }
-
-        if self._is_distributed and rank0_only():
-            self.num_rollouts_done_store.set("num_done", "0")
-
-        self.num_steps_done += count_steps_delta
-
-        return losses
-
     @rank0_only
     def _training_log(
         self, writer, losses: Dict[str, float], prev_time: int = 0
@@ -686,17 +536,47 @@ class TransformerTrainer(BaseRLTrainer):
                 )
             )
 
-    def should_end_early(self, rollout_step) -> bool:
-        if not self._is_distributed:
-            return False
-        # This is where the preemption of workers happens.  If a
-        # worker detects it will be a straggler, it preempts itself!
-        return (
-            rollout_step
-            >= self.config.RL.PPO.num_steps * self.SHORT_ROLLOUT_THRESHOLD
-        ) and int(self.num_rollouts_done_store.get("num_done")) >= (
-            self.config.RL.DDPPO.sync_frac * torch.distributed.get_world_size()
-        )
+    def _run_epoch(
+        self, 
+        split: str, 
+        epoch_num: int=0
+    ):
+        is_train = split == 'train'
+        self.transformer_policy.train(is_train)
+
+        pbar = tqdm(enumerate(self.train_loader), total=len(self.train_loader)) if is_train else enumerate(self.train_loader)
+        losses = []
+        for it, (x, y, r, t) in pbar:
+
+            # place data on the correct device
+            x = x.to(self.device)
+            y = y.to(self.device)
+            r = r.to(self.device)
+            t = t.to(self.device)
+
+            # forward the model
+            with torch.set_grad_enabled(is_train):
+                # logits, loss = model(x, y, r)
+                logits, loss = self._evaluate_actions_wrapper(x, y, y, r, t)
+                loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
+                losses.append(loss.item())
+
+            if is_train:
+
+                # backprop and update the parameters
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.transformer_policy.parameters(), self.config.TRANSFORMER.grad_norm_clip)
+                self.optimizer.step()
+
+                # report progress
+                pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
+
+        if is_train:
+            loss["train"] = float(np.mean(losses))
+        else:
+            loss["test"] = float(np.mean(losses))
+        return loss
 
     @profiling_wrapper.RangeContext("train")
     def train(self) -> None:
@@ -712,33 +592,31 @@ class TransformerTrainer(BaseRLTrainer):
         prev_time = 0
 
         lr_scheduler = LambdaLR(
-            optimizer=self.agent.optimizer,
+            optimizer=self.optimizer,
             lr_lambda=lambda x: 1 - self.percent_done(),
         )
 
         resume_state = load_resume_state(self.config)
         if resume_state is not None:
-            self.agent.load_state_dict(resume_state["state_dict"])
-            self.agent.optimizer.load_state_dict(resume_state["optim_state"])
+            self.transformer_policy.load_state_dict(resume_state["state_dict"])
+            self.optimizer.load_state_dict(resume_state["optim_state"])
             lr_scheduler.load_state_dict(resume_state["lr_sched_state"])
 
-            requeue_stats = resume_state["requeue_stats"]
-            self.env_time = requeue_stats["env_time"]
-            self.pth_time = requeue_stats["pth_time"]
-            self.num_steps_done = requeue_stats["num_steps_done"]
-            self.num_updates_done = requeue_stats["num_updates_done"]
-            self._last_checkpoint_percent = requeue_stats[
-                "_last_checkpoint_percent"
-            ]
-            count_checkpoints = requeue_stats["count_checkpoints"]
-            prev_time = requeue_stats["prev_time"]
+            # requeue_stats = resume_state["requeue_stats"]
+            # self.env_time = requeue_stats["env_time"]
+            # self.pth_time = requeue_stats["pth_time"]
+            # self.num_steps_done = requeue_stats["num_steps_done"]
+            # self.num_updates_done = requeue_stats["num_updates_done"]
+            # self._last_checkpoint_percent = requeue_stats[
+            #     "_last_checkpoint_percent"
+            # ]
+            # count_checkpoints = requeue_stats["count_checkpoints"]
+            # prev_time = requeue_stats["prev_time"]
 
-            self.running_episode_stats = requeue_stats["running_episode_stats"]
-            self.window_episode_stats.update(
-                requeue_stats["window_episode_stats"]
-            )
-
-        ppo_cfg = self.config.RL.PPO
+            # self.running_episode_stats = requeue_stats["running_episode_stats"]
+            # self.window_episode_stats.update(
+            #     requeue_stats["window_episode_stats"]
+            # )
 
         with (
             get_writer(self.config, flush_secs=self.flush_secs)
@@ -749,23 +627,18 @@ class TransformerTrainer(BaseRLTrainer):
                 profiling_wrapper.on_start_step()
                 profiling_wrapper.range_push("train update")
 
-                if ppo_cfg.use_linear_clip_decay:
-                    self.agent.clip_param = ppo_cfg.clip_param * (
-                        1 - self.percent_done()
-                    )
-
                 if rank0_only() and self._should_save_resume_state():
-                    requeue_stats = dict(
-                        env_time=self.env_time,
-                        pth_time=self.pth_time,
-                        count_checkpoints=count_checkpoints,
-                        num_steps_done=self.num_steps_done,
-                        num_updates_done=self.num_updates_done,
-                        _last_checkpoint_percent=self._last_checkpoint_percent,
-                        prev_time=(time.time() - self.t_start) + prev_time,
-                        running_episode_stats=self.running_episode_stats,
-                        window_episode_stats=dict(self.window_episode_stats),
-                    )
+                    # requeue_stats = dict(
+                    #     env_time=self.env_time,
+                    #     pth_time=self.pth_time,
+                    #     count_checkpoints=count_checkpoints,
+                    #     num_steps_done=self.num_steps_done,
+                    #     num_updates_done=self.num_updates_done,
+                    #     _last_checkpoint_percent=self._last_checkpoint_percent,
+                    #     prev_time=(time.time() - self.t_start) + prev_time,
+                    #     running_episode_stats=self.running_episode_stats,
+                    #     window_episode_stats=dict(self.window_episode_stats),
+                    # )
 
                     save_resume_state(
                         dict(
@@ -773,74 +646,27 @@ class TransformerTrainer(BaseRLTrainer):
                             optim_state=self.agent.optimizer.state_dict(),
                             lr_sched_state=lr_scheduler.state_dict(),
                             config=self.config,
-                            requeue_stats=requeue_stats,
+                            # requeue_stats=requeue_stats,
                         ),
                         self.config,
                     )
 
                 if EXIT.is_set():
-                    profiling_wrapper.range_pop()  # train update
-
-                    self.envs.close()
 
                     requeue_job()
 
                     return
 
-                self.agent.eval()
-                count_steps_delta = 0
-                profiling_wrapper.range_push("rollouts loop")
+                    # Question. 
 
-                profiling_wrapper.range_push("_collect_rollout_step")
-                for buffer_index in range(self._nbuffers):
-                    self._compute_actions_and_step_envs(buffer_index)
+                loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 
-                for step in range(ppo_cfg.num_steps):
-                    is_last_step = (
-                        self.should_end_early(step + 1)
-                        or (step + 1) == ppo_cfg.num_steps
-                    )
-
-                    for buffer_index in range(self._nbuffers):
-                        count_steps_delta += self._collect_environment_result(
-                            buffer_index
-                        )
-
-                        if (buffer_index + 1) == self._nbuffers:
-                            profiling_wrapper.range_pop()  # _collect_rollout_step
-
-                        if not is_last_step:
-                            if (buffer_index + 1) == self._nbuffers:
-                                profiling_wrapper.range_push(
-                                    "_collect_rollout_step"
-                                )
-
-                            self._compute_actions_and_step_envs(buffer_index)
-
-                    if is_last_step:
-                        break
-
-                profiling_wrapper.range_pop()  # rollouts loop
-
-                if self._is_distributed:
-                    self.num_rollouts_done_store.add("num_done", 1)
-
-                (
-                    value_loss,
-                    action_loss,
-                    dist_entropy,
-                ) = self._update_agent()
-
-                if ppo_cfg.use_linear_lr_decay:
+                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
                     lr_scheduler.step()  # type: ignore
 
                 self.num_updates_done += 1
-                losses = self._coalesce_post_step(
-                    dict(value_loss=value_loss, action_loss=action_loss),
-                    count_steps_delta,
-                )
 
-                self._training_log(writer, losses, prev_time)
+                self._training_log(writer, loss, prev_time)
 
                 # checkpoint model
                 if rank0_only() and self.should_checkpoint():
