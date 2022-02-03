@@ -223,7 +223,7 @@ def batch_obs(
         obs.keys(),
         key=lambda name: 1
         if isinstance(obs[name], numbers.Number)
-        else np.prod(obs[name].shape),
+        else np.prod(obs[name].shape),  # type: ignore
         reverse=True,
     )
 
@@ -234,7 +234,7 @@ def batch_obs(
                 batch[sensor_name].append(torch.as_tensor(sensor))
             else:
                 if sensor_name not in batch_t:
-                    batch_t[sensor_name] = cache.get(
+                    batch_t[sensor_name] = cache.get(  # type: ignore
                         len(observations),
                         sensor_name,
                         torch.as_tensor(sensor),
@@ -246,13 +246,13 @@ def batch_obs(
                 # path of sensor being an np.ndarray
                 # np.asarray is ~3x slower than checking
                 if isinstance(sensor, np.ndarray):
-                    batch_t[sensor_name][i] = sensor
+                    batch_t[sensor_name][i] = sensor  # type: ignore
                 elif torch.is_tensor(sensor):
-                    batch_t[sensor_name][i].copy_(sensor, non_blocking=True)
+                    batch_t[sensor_name][i].copy_(sensor, non_blocking=True)  # type: ignore
                 # If the sensor wasn't a tensor, then it's some CPU side data
                 # so use a numpy array
                 else:
-                    batch_t[sensor_name][i] = np.asarray(sensor)
+                    batch_t[sensor_name][i] = np.asarray(sensor)  # type: ignore
 
         # With the batching cache, we use pinned mem
         # so we can start the move to the GPU async
@@ -265,7 +265,7 @@ def batch_obs(
             if isinstance(batch_t[sensor_name], np.ndarray):
                 batch_t[sensor_name] = torch.from_numpy(batch_t[sensor_name])
 
-            batch_t[sensor_name] = batch_t[sensor_name].to(
+            batch_t[sensor_name] = batch_t[sensor_name].to(  # type: ignore
                 device, non_blocking=True
             )
 
@@ -332,6 +332,7 @@ def generate_video(
     tb_writer: TensorboardWriter,
     fps: int = 10,
     verbose: bool = True,
+    keys_to_include_in_name: Optional[List[str]] = None,
 ) -> None:
     r"""Generate video according to specified information.
 
@@ -352,8 +353,22 @@ def generate_video(
         return
 
     metric_strs = []
-    for k, v in metrics.items():
-        metric_strs.append(f"{k}={v:.2f}")
+    if (
+        keys_to_include_in_name is not None
+        and len(keys_to_include_in_name) > 0
+    ):
+        use_metrics_k = [
+            k
+            for k in metrics
+            if any(
+                to_include_k in k for to_include_k in keys_to_include_in_name
+            )
+        ]
+    else:
+        use_metrics_k = metrics
+
+    for k in use_metrics_k:
+        metric_strs.append(f"{k}={metrics[k]:.2f}")
 
     video_name = f"episode={episode_id}-ckpt={checkpoint_idx}-" + "-".join(
         metric_strs
@@ -367,7 +382,9 @@ def generate_video(
         )
 
 
-def tensor_to_depth_images(tensor: Union[torch.Tensor, List]) -> np.ndarray:
+def tensor_to_depth_images(
+    tensor: Union[torch.Tensor, List]
+) -> List[np.ndarray]:
     r"""Converts tensor (or list) of n image tensors to list of n images.
     Args:
         tensor: tensor containing n image tensors
@@ -631,14 +648,21 @@ def action_array_to_dict(
     """We naively assume that all actions are 1D (len(shape) == 1)"""
 
     # Assume that the action space only has one root SimulatorTaskAction
-    root_action_name, space = list(action_space.spaces.items())[0]
-    action_name_to_lengths = {k: v.shape[0] for k, v in space.spaces.items()}
+    root_action_names = tuple(action_space.spaces.keys())
+    if len(root_action_names) == 1:
+        # No need for a tuple if there is only one action
+        root_action_names = root_action_names[0]
+    action_name_to_lengths = {}
+    for act_dict in action_space.spaces.values():
+        for k, v in act_dict.items():
+            # The only element in the action
+            action_name_to_lengths[k] = v.shape[0]
 
     # Determine action arguments for root_action_name
     action_args = {}
     action_offset = 0
     for action_name, action_length in action_name_to_lengths.items():
-        action_values = action[action_offset:action_length]
+        action_values = action[action_offset : action_offset + action_length]
         if clip:
             action_values = np.clip(
                 action_values.detach().cpu().numpy(), -1.0, 1.0
@@ -648,9 +672,8 @@ def action_array_to_dict(
 
     action_dict = {
         "action": {
-            "action": root_action_name,
+            "action": root_action_names,
             "action_args": action_args,
         },
     }
-
     return action_dict

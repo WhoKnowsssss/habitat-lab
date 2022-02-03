@@ -18,7 +18,7 @@ TASK:
     SPAWN_REGION_SCALE: 0.2
     # -1 does not change the max impulse
     JOINT_MAX_IMPULSE: -1.0
-    CONSTRAINT_VIOLATE_SHOULD_END: False
+    CONSTRAINT_VIOLATION_ENDS_EPISODE: False
 
     # Standard deviation of the noise to add to the arm starting position.
 
@@ -114,6 +114,8 @@ SIMULATOR:
     ACTION_SPACE_CONFIG: v0
     AGENTS: ['AGENT_0']
     ROBOT_JOINT_START_NOISE: 0.0
+    CONCUR_RENDER: True
+    AUTO_SLEEP: True
     AGENT_0:
         HEIGHT: 1.5
         IS_SET_START_STATE: False

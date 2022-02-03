@@ -31,7 +31,7 @@ class GeoMeasure(Measure):
 
     def _get_agent_pos(self):
         current_pos = self._sim.robot.base_pos
-        return self._sim.pathfinder.snap_point(current_pos)
+        return self._sim.safe_snap_point(current_pos)
 
     def _get_cur_geo_dist(self, task):
         distance_to_target = self._sim.geodesic_distance(
@@ -42,6 +42,9 @@ class GeoMeasure(Measure):
         if distance_to_target == np.inf:
             distance_to_target = self._prev_dist
             print("Distance is infinity", "returning ", distance_to_target)
+        if distance_to_target is None:
+            distance_to_target = 30
+            print("Distance is None", "returning ", distance_to_target)
         return distance_to_target
 
 
@@ -74,11 +77,7 @@ class NavToObjReward(GeoMeasure):
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
         reward = self._config.SLACK_REWARD
-        cur_dist = self._get_cur_geo_dist(task)
         cur_dist = task.measurements.measures[DistToGoal.cls_uuid].get_metric()
-        cur_angle_dist = task.measurements.measures[
-            RotDistToGoal.cls_uuid
-        ].get_metric()
 
         reward += self._prev_dist - cur_dist
         self._prev_dist = cur_dist
@@ -104,7 +103,7 @@ class NavToObjReward(GeoMeasure):
                 RotDistToGoal.cls_uuid
             ].get_metric()
 
-            if cur_angle_dist < 0:
+            if self._cur_angle_dist < 0:
                 angle_diff = 0.0
             else:
                 angle_diff = self._cur_angle_dist - angle_dist
@@ -224,7 +223,6 @@ class NavToPosSucc(GeoMeasure):
             self.uuid,
             [DistToGoal.cls_uuid],
         )
-        self._action_can_stop = task.actions[BASE_ACTION_NAME].end_on_stop
 
         super().reset_metric(
             *args,
@@ -279,8 +277,11 @@ class NavToObjSuccess(GeoMeasure):
         else:
             self._metric = nav_pos_succ
         called_stop = self.does_action_want_stop(task, observations)
-        if self._action_can_stop and not called_stop:
-            self._metric = False
+        if self._action_can_stop:
+            if called_stop:
+                task.should_end = True
+            else:
+                self._metric = False
 
     def does_action_want_stop(self, task, obs):
         if self._config.HEURISTIC_STOP:

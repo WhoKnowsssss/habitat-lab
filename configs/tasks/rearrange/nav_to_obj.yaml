@@ -9,8 +9,7 @@ TASK:
     TYPE: RearrangeNavToObjTask-v0
 
     MUST_LOOK_AT_TARG: True
-    DEBUG_GOAL_POINT: True
-    CONSTRAINT_VIOLATE_SHOULD_END: False
+    CONSTRAINT_VIOLATION_ENDS_EPISODE: False
     # If true, will always regenerate the cache
     FORCE_REGENERATE: False
     DESIRED_RESTING_POSITION: [0.5, 0.0, 1.0]
@@ -29,17 +28,11 @@ TASK:
     REWARD_MEASUREMENT: "nav_to_obj_reward"
     SUCCESS_MEASUREMENT: "nav_to_obj_success"
 
-    JOINT_SENSOR:
-        TYPE: "JointSensor"
-        DIMENSIONALITY: 7
-    END_EFFECTOR_SENSOR:
-        TYPE: "EEPositionSensor"
-    IS_HOLDING_SENSOR:
-        TYPE: "IsHoldingSensor"
-    RELATIVE_RESTING_POS_SENSOR:
-        TYPE: "RelativeRestingPositionSensor"
-
-    SENSORS: ["JOINT_SENSOR", "IS_HOLDING_SENSOR", "END_EFFECTOR_SENSOR", "RELATIVE_RESTING_POS_SENSOR"]
+    TARGET_START_SENSOR:
+        TYPE: "TargetStartSensor"
+        GOAL_FORMAT: "POLAR"
+        DIMENSIONALITY: 2
+    SENSORS: ["TARGET_START_SENSOR"]
 
     ROBOT_FORCE:
         TYPE: "RobotForce"
@@ -51,10 +44,6 @@ TASK:
         TYPE: "RobotCollisions"
     OBJECT_TO_GOAL_DISTANCE:
         TYPE: "ObjectToGoalDistance"
-    END_EFFECTOR_TO_OBJECT_DISTANCE:
-        TYPE: "EndEffectorToObjectDistance"
-    END_EFFECTOR_TO_REST_DISTANCE:
-        TYPE: "EndEffectorToRestDistance"
     ROT_DIST_TO_GOAL:
       TYPE: "RotDistToGoal"
     DIST_TO_GOAL:
@@ -66,6 +55,8 @@ TASK:
     NAV_TO_POS_SUCC:
       TYPE: "NavToPosSucc"
       SUCCESS_DISTANCE: 0.2
+    NUM_STEPS:
+      TYPE: "NumStepsMeasure"
     REARRANGE_NAV_TO_OBJ_REWARD:
         TYPE: "NavToObjReward"
         # Negative means a penalty
@@ -89,14 +80,13 @@ TASK:
         - "ROBOT_FORCE"
         - "FORCE_TERMINATE"
         - "ROBOT_COLLS"
-        - "END_EFFECTOR_TO_REST_DISTANCE"
-        - "END_EFFECTOR_TO_OBJECT_DISTANCE"
         - "ROT_DIST_TO_GOAL"
         - "DIST_TO_GOAL"
         - "BAD_CALLED_TERMINATE"
         - "NAV_TO_POS_SUCC"
         - "REARRANGE_NAV_TO_OBJ_SUCCESS"
         - "REARRANGE_NAV_TO_OBJ_REWARD"
+        - "NUM_STEPS"
     ACTIONS:
       BASE_VELOCITY:
         TYPE: "BaseVelAction"
@@ -107,17 +97,19 @@ TASK:
         END_ON_STOP: True
         MIN_ABS_LIN_SPEED: 1.0
         MIN_ABS_ANG_SPEED: 1.0
-    POSSIBLE_ACTIONS: ['BASE_VELOCITY', 'STOP']
+    POSSIBLE_ACTIONS: ['BASE_VELOCITY']
 
 SIMULATOR:
     ACTION_SPACE_CONFIG: v0
     DEBUG_RENDER: False
+    CONCUR_RENDER: True
+    AUTO_SLEEP: True
     AGENTS: ['AGENT_0']
     AGENT_0:
         HEIGHT: 1.5
         IS_SET_START_STATE: False
         RADIUS: 0.1
-        SENSORS: ['HEAD_RGB_SENSOR', 'HEAD_DEPTH_SENSOR', 'ARM_RGB_SENSOR', 'ARM_DEPTH_SENSOR']
+        SENSORS: ['HEAD_DEPTH_SENSOR']
         START_POSITION: [0, 0, 0]
         START_ROTATION: [0, 0, 0, 1]
     HEAD_RGB_SENSOR:

@@ -53,7 +53,7 @@ class RearrangePickTaskV1(RearrangeTask):
             sel_idx = np.random.randint(0, len(target_positions))
         targ_pos = target_positions[sel_idx]
 
-        orig_start_pos = sim.pathfinder.snap_point(targ_pos)
+        orig_start_pos = sim.safe_snap_point(targ_pos)
 
         state = sim.capture_state()
         start_pos = orig_start_pos
@@ -124,8 +124,8 @@ class RearrangePickTaskV1(RearrangeTask):
     def _should_prevent_grip(self, action_args):
         return (
             self._sim.grasp_mgr.is_grasped
-            and action_args.get("grip_ac", None) is not None
-            and action_args["grip_ac"] <= 0
+            and action_args.get("grip_action", None) is not None
+            and action_args["grip_action"] <= 0
         )
 
     def step(self, action, episode):
@@ -133,7 +133,7 @@ class RearrangePickTaskV1(RearrangeTask):
 
         if self._should_prevent_grip(action_args):
             # No releasing the object once it is held.
-            action_args["grip_ac"] = None
+            action_args["grip_action"] = None
         obs = super().step(action=action, episode=episode)
 
         return obs

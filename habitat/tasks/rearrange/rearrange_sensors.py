@@ -586,6 +586,20 @@ class RobotForce(Measure):
 
         self._metric = self._accum_force
 
+@registry.register_measure
+class NumStepsMeasure(Measure):
+    cls_uuid: str = "num_steps"
+
+    @staticmethod
+    def _get_uuid(*args, **kwargs):
+        return NumStepsMeasure.cls_uuid
+
+    def reset_metric(self, *args, episode, task, observations, **kwargs):
+        self._metric = 0
+
+    def update_metric(self, *args, episode, task, observations, **kwargs):
+        self._metric += 1
+
 
 @registry.register_measure
 class ForceTerminate(Measure):
@@ -679,7 +693,7 @@ class RearrangeReward(Measure):
         # Penalize the force that was added to the accumulated force at the
         # last time step.
         reward -= max(
-            0,
+            0,  # This penalty is always positive
             min(
                 self._config.FORCE_PEN * force_metric.add_force,
                 self._config.MAX_FORCE_PEN,
