@@ -23,14 +23,17 @@ class StateActionReturnDataset(Dataset):
 
     def __getitem__(self, idx):
         block_size = self.block_size // 3
+        idx = idx + block_size
         done_idx = idx + block_size
         for i in self.done_idxs:
             if i > idx: # first done_idx greater than idx
                 done_idx = min(int(i), done_idx)
                 break
         idx = done_idx - block_size
-        states = torch.tensor(np.array(self.data[idx:done_idx]), dtype=torch.float32).reshape(block_size, -1) # (block_size, 4*84*84)
+        states = self.data[idx:done_idx]
         # states = states / 255.
+        assert (idx >= 0), "Error on indexing"
+        assert (len(states) == 30), "Error on states length"
         actions = torch.tensor(self.actions[idx:done_idx], dtype=torch.float32).unsqueeze(1) # (block_size, 1)
         rtgs = torch.tensor(self.rtgs[idx:done_idx], dtype=torch.float32).unsqueeze(1)
         timesteps = torch.tensor(self.timesteps[idx:idx+1], dtype=torch.int64).unsqueeze(1)
@@ -41,6 +44,7 @@ class StateActionReturnDataset(Dataset):
     def from_config(
         cls,
         config: Config,
+        context_length: int=30,
     ):
         obss = []
         actions = []
@@ -48,7 +52,9 @@ class StateActionReturnDataset(Dataset):
         done_idxs = []
         stepwise_returns = []
 
-        path, _, filenames = next(os.walk(config.trajectory_dir))
+        path = config.trajectory_dir
+        filenames = os.listdir(path)
+        filenames.remove("model.pth")
         transitions_per_buffer = np.zeros(len(filenames), dtype=int)
         num_trajectories = 0
         while len(obss) < config.steps_per_training:
@@ -56,37 +62,41 @@ class StateActionReturnDataset(Dataset):
             i = transitions_per_buffer[buffer_num]
             print('loading from buffer %d which has %d already loaded' % (buffer_num, i))
 
-            file = os.join(path, filenames[buffer_num])
+            file = os.path.join(path, filenames[buffer_num])
             if os.path.exists(file):
-                dataset_raw = pickle.load(open(file, "rb"))
+                dataset_raw = torch.load(file)
                 done = False
                 curr_num_transitions = len(obss)
-                trajectories_to_load = config.steps_per_file
+                trajectories_to_load = config.trajs_per_file
+                buffer_index = np.random.randint(0, dataset_raw["actions"].shape[0])
                 while not done:
-                    buffer_index = np.random.randint(len(dataset_raw))
                     # states, ac, ret, next_states, next_action, next_reward, terminal, indices = frb.sample_transition_batch(batch_size=1, indices=[i])
-                    states, ac, ret, terminal = np.concatenate([dataset_raw[buffer_index]["p_obs"][k].reshape(-1) for k in dataset_raw[buffer_index]["p_obs"].keys()]), dataset_raw[buffer_index]["act"], [dataset_raw[buffer_index]["rwd"]], [dataset_raw[buffer_index]["dne"]]
+                    states, ac, ret, terminal = {k:dataset_raw["obs"][k][buffer_index] for k in dataset_raw["obs"].keys()}, dataset_raw["actions"][buffer_index].numpy(), [dataset_raw["rewards"][buffer_index].numpy()], [dataset_raw["done"][buffer_index].numpy()]
                     # states = states.transpose((0, 3, 1, 2))[0] # (1, 84, 84, 4) --> (4, 84, 84)
                     obss += [states]
                     actions += [ac] if ac.shape[0] > 1 else [ac[0]]
                     stepwise_returns += [ret[0]]
-                    if terminal[0]:
+                    if terminal[0] == 1:
                         done_idxs += [len(obss)]
+                        curr_num_transitions = done_idxs[-1]
                         returns += [0]
                         if trajectories_to_load == 0:
                             done = True
                         else:
                             trajectories_to_load -= 1
+                            buffer_index = np.random.randint(0, dataset_raw["actions"].shape[0])
                     returns[-1] += ret[0]
                     i += 1
+                    buffer_index += 1
+                    
                     if i >= 100000:
                         obss = obss[:curr_num_transitions]
                         actions = actions[:curr_num_transitions]
                         stepwise_returns = stepwise_returns[:curr_num_transitions]
                         returns[-1] = 0
-                        i = transitions_per_buffer[buffer_num]
+                        i = curr_num_transitions
                         done = True
-                num_trajectories += (config.steps_per_file - trajectories_to_load)
+                num_trajectories += (config.trajs_per_file - trajectories_to_load)
                 transitions_per_buffer[buffer_num] = i
             print('this buffer has %d loaded transitions and there are now %d transitions total divided into %d trajectories' % (i, len(obss), num_trajectories))
 
@@ -118,8 +128,8 @@ class StateActionReturnDataset(Dataset):
 
         return cls(
             obss, 
+            context_length,
             actions, 
-            returns, 
             done_idxs, 
             rtg, 
             timesteps

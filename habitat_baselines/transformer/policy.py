@@ -130,6 +130,18 @@ class TransformerResNetPolicy(Policy):
         logits = logits[range(logits.shape[0]), valid_context-1]
         return logits
 
+    def forward(
+        self,
+        states, 
+        actions, 
+        targets, 
+        rtgs,
+        timesteps,
+    ):
+        _, loss = self.net(states, prev_actions=actions, targets=targets, rtgs=rtgs, timesteps=timesteps)
+
+        return loss
+
 class Net(nn.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def forward(self, observations, rnn_hidden_states, prev_actions, masks):
@@ -429,7 +441,7 @@ class TransformerResnetNet(Net):
         outs = torch.stack(outs).transpose(1,0)
         assert (outs.shape[1] <= self.context_length), "Input Dimension Error"
         assert ((targets is not None) != (current_context is not None)), "Training or Evaluating? "
-        if outs.shape[1] < self.context_length:
+        if outs.shape[1] < self.context_length and (current_context is not None):
             outs = torch.cat((torch.zeros((outs.shape[0], self.context_length - outs.shape[1], outs.shape[2]), device=outs.device), outs), dim=1)
         
         # Move valid state-action-reward pair to the left

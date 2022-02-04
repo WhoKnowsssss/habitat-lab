@@ -38,10 +38,23 @@ RL:
   GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position']
 
   TRAJECTORY_DATASET:
-  
+    trajectory_dir: "data/temp_data"
+    steps_per_training: 10000
+    trajs_per_file: 5000
 
   TRANSFORMER:
-    return_to_go: 1
+    lr: 1.0E-4
+    eps: 1.0E-5
+    grad_norm_clip: 1.0
+    use_linear_lr_decay: True
+    batch_size: 128
+    num_workers: 4
+
+
+
+
+    return_to_go: 128
+    
     num_mini_batch: 2
     context_length: 30
     max_episode_step: 200
@@ -65,13 +78,13 @@ RL:
     # The PyTorch distributed backend to use
     distrib_backend: NCCL
     # Visual encoder backbone
-    pretrained_weights: data/ddppo-models/gibson-2plus-resnet50.pth
+    pretrained_weights: data/temp_data/model.pth # data/ddppo-models/gibson-2plus-resnet50.pth
     # Initialize with pretrained weights
     pretrained: False
     # Initialize just the visual encoder backbone with pretrained weights
-    pretrained_encoder: False
+    pretrained_encoder: True
     # Whether or not the visual encoder backbone will be trained.
-    train_encoder: True
+    train_encoder: False
 
     # Model parameters
     backbone: resnet50

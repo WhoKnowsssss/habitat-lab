@@ -211,8 +211,7 @@ class GPT(nn.Module):
         # timesteps: (batch, 1, 1)
         # attention_mask: (batch, block_size)
 
-        if targets is not None:
-            targets = targets.squeeze(-2)
+
         visual_inputs, other_input = torch.split(states,self.n_embd//2, -1)
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
         # vision_embeddings = vision_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd//2) # (batch, block_size, n_embd)

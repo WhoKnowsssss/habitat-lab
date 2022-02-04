@@ -13,7 +13,7 @@ from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
 
 import numpy as np
 import torch
-import tqdm
+from tqdm import tqdm
 from gym import spaces
 from torch import device, nn
 from torch.optim.lr_scheduler import LambdaLR
@@ -85,7 +85,6 @@ class TransformerTrainer(BaseRLTrainer):
     def __init__(self, config=None):
         super().__init__(config)
         self.transformer_policy = None
-        self.agent = None
         self.envs = None
         self.obs_transforms = []
 
@@ -126,7 +125,7 @@ class TransformerTrainer(BaseRLTrainer):
 
         return t.to(device=orig_device)
 
-    def _init_model(self, ppo_cfg: Config=None) -> None:
+    def _setup_transformer_policy(self) -> None:
         r"""Sets up actor critic and agent for PPO.
 
         Args:
@@ -166,12 +165,12 @@ class TransformerTrainer(BaseRLTrainer):
                 }
             )
         elif self.config.RL.TRANSFORMER.pretrained_encoder:
-            prefix = "transformer_policy.net.visual_encoder."
+            prefix = "net.visual_encoder."
             self.transformer_policy.net.visual_encoder.load_state_dict(
                 {
-                    k[len(prefix) :]: v
+                    k[k.find(prefix) + len(prefix) :]: v
                     for k, v in pretrained_state["state_dict"].items()
-                    if k.startswith(prefix)
+                    if prefix in k
                 }
             )
 
@@ -209,10 +208,12 @@ class TransformerTrainer(BaseRLTrainer):
             local_rank, tcp_store = init_distrib_slurm(
                 self.config.RL.TRANSFORMER.distrib_backend
             )
+            world_rank = torch.distributed.get_rank()
+            world_size = torch.distributed.get_world_size()
             if rank0_only():
                 logger.info(
                     "Initialized DD-PPO with {} workers".format(
-                        torch.distributed.get_world_size()
+                        world_size
                     )
                 )
 
@@ -221,7 +222,7 @@ class TransformerTrainer(BaseRLTrainer):
             self.config.SIMULATOR_GPU_ID = local_rank
             # Multiply by the number of simulators to make sure they also get unique seeds
             self.config.TASK_CONFIG.SEED += (
-                torch.distributed.get_rank() * self.config.NUM_ENVIRONMENTS
+                world_rank * self.config.NUM_ENVIRONMENTS
             )
             self.config.freeze()
 
@@ -246,88 +247,120 @@ class TransformerTrainer(BaseRLTrainer):
         if rank0_only() and not os.path.isdir(self.config.CHECKPOINT_FOLDER):
             os.makedirs(self.config.CHECKPOINT_FOLDER)
 
-        if self._is_distributed:
-            self.init_distributed(find_unused_params=True)
+        self._init_envs(self.config)
+
+        action_space = self.envs.action_spaces[0]
+        if self.using_velocity_ctrl:
+            # For navigation using a continuous action space for a task that
+            # may be asking for discrete actions
+            self.policy_action_space = action_space["VELOCITY_CONTROL"]
+        else:
+            self.policy_action_space = action_space
+
+        self._setup_transformer_policy()
 
         logger.info(
             "agent number of parameters: {}".format(
-                sum(param.numel() for param in self.agent.parameters())
+                sum(param.numel() for param in self.transformer_policy.parameters())
             )
         )
 
-        self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET)
+        if self._is_distributed:
+            self.init_distributed(find_unused_params=True)
+            torch.distributed.barrier()
+
+        self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
         self.sampler = None
         if self._is_distributed:
             self.sampler = DistributedSampler(self.train_dataset,
-                                num_replicas=torch.distributed.get_world_size(),
-                                rank=local_rank,
+                                num_replicas=world_size,
+                                rank=world_rank,
                                 shuffle=True,
                                 seed=self.config.TASK_CONFIG.SEED
                             )
+            
         self.train_loader = DataLoader(self.train_dataset, shuffle=True, pin_memory=True,
-                                batch_size=self.config.BATCH_SIZE,
-                                num_workers=self.config.NUM_WORKERS, 
-                                sampler=self.sampler
+                                batch_size=self.config.RL.TRANSFORMER.batch_size,
+                                num_workers=self.config.RL.TRANSFORMER.num_workers, 
+                                sampler=self.sampler,
                             )
 
-        self.optimizer = torch.nn.optim.Adam(
+        self.init
+
+        self.optimizer = torch.optim.Adam(
             list(filter(lambda p: p.requires_grad, self.transformer_policy.parameters())),
             lr=self.config.RL.TRANSFORMER.lr,
             eps=self.config.RL.TRANSFORMER.eps,
         )
+
+        self.envs.close()
+
 
 
         self.env_time = 0.0
         self.pth_time = 0.0
         self.t_start = time.time()
 
-    def init_distributed(self, find_unused_params: bool = True) -> None:
-        r"""Initializes distributed training for the model
+    # def init_distributed(self, find_unused_params: bool = True) -> None:
+    #     r"""Initializes distributed training for the model
 
-        1. Broadcasts the model weights from world_rank 0 to all other workers
-        2. Adds gradient hooks to the model
+    #     1. Broadcasts the model weights from world_rank 0 to all other workers
+    #     2. Adds gradient hooks to the model
 
-        :param find_unused_params: Whether or not to filter out unused parameters
-                                   before gradient reduction.  This *must* be True if
-                                   there are any parameters in the model that where unused in the
-                                   forward pass, otherwise the gradient reduction
-                                   will not work correctly.
-        """
-        class _EvalActionsWrapper(torch.nn.Module):
-            r"""Wrapper on evaluate_actions that allows that to be called from forward.
-            This is needed to interface with DistributedDataParallel's forward call
-            """
+    #     :param find_unused_params: Whether or not to filter out unused parameters
+    #                                before gradient reduction.  This *must* be True if
+    #                                there are any parameters in the model that where unused in the
+    #                                forward pass, otherwise the gradient reduction
+    #                                will not work correctly.
+    #     """
+    #     class _EvalActionsWrapper(torch.nn.Module):
+    #         r"""Wrapper on evaluate_actions that allows that to be called from forward.
+    #         This is needed to interface with DistributedDataParallel's forward call
+    #         """
 
-            def __init__(self, transformer_policy):
-                super().__init__()
-                self.transformer_policy = transformer_policy
+    #         def __init__(self, transformer_policy):
+    #             super().__init__()
+    #             self.transformer_policy = transformer_policy
 
-            def forward(self, *args, **kwargs):
-                return self.transformer_policy.evaluate_actions(*args, **kwargs)
+    #         def forward(self, *args, **kwargs):
+    #             return self.transformer_policy.evaluate_actions(*args, **kwargs)
         
-        # NB: Used to hide the hooks from the nn.Module,
-        # so they don't show up in the state_dict
-        class Guard:  # noqa: SIM119
-            def __init__(self, model, device):
-                if torch.cuda.is_available():
-                    self.ddp = torch.nn.parallel.DistributedDataParallel(
-                        model,
-                        device_ids=[device],
-                        output_device=device,
-                        find_unused_parameters=find_unused_params,
-                    )
-                else:
-                    self.ddp = torch.nn.parallel.DistributedDataParallel(
-                        model,
-                        find_unused_parameters=find_unused_params,
-                    )
+    #     # NB: Used to hide the hooks from the nn.Module,
+    #     # so they don't show up in the state_dict
+    #     class Guard:  # noqa: SIM119
+    #         def __init__(self, model, device):
+    #             if torch.cuda.is_available():
+    #                 self.ddp = torch.nn.parallel.DistributedDataParallel(
+    #                     model,
+    #                     device_ids=[device],
+    #                     output_device=device,
+    #                     find_unused_parameters=find_unused_params,
+    #                 )
+    #             else:
+    #                 self.ddp = torch.nn.parallel.DistributedDataParallel(
+    #                     model,
+    #                     find_unused_parameters=find_unused_params,
+    #                 )
 
-            def __call__(self, observations, rnn_hidden_states, prev_actions, masks, action):
-                return self.ddp(observations, rnn_hidden_states, prev_actions, masks, action)
+    #         def __call__(self, observations, rnn_hidden_states, prev_actions, masks, action):
+    #             return self.ddp(observations, rnn_hidden_states, prev_actions, masks, action)
 
-        self._evaluate_actions_wrapper = Guard(_EvalActionsWrapper(self.transformer_policy), self.device)  # type: ignore
+    #     self._evaluate_actions_wrapper = Guard(_EvalActionsWrapper(self.transformer_policy), self.device)  # type: ignore
 
-        # Question on this!! 
+    def init_distributed(self, find_unused_params: bool = True) -> None:
+
+        if torch.cuda.is_available():
+            self.transformer_policy = torch.nn.parallel.DistributedDataParallel(
+                self.transformer_policy,
+                device_ids=[self.device],
+                output_device=self.device,
+                find_unused_parameters=find_unused_params,
+            )
+        else:
+            self.transformer_policy = torch.nn.parallel.DistributedDataParallel(
+                self.transformer_policy,
+                find_unused_parameters=find_unused_params,
+            )
 
     @rank0_only
     @profiling_wrapper.RangeContext("save_checkpoint")
@@ -549,15 +582,17 @@ class TransformerTrainer(BaseRLTrainer):
         for it, (x, y, r, t) in pbar:
 
             # place data on the correct device
-            x = x.to(self.device)
-            y = y.to(self.device)
+
+            x = [{idx2: x[idx1][idx2].to(self.device) for idx2 in x[idx1].keys()} for idx1 in range(len(x))]
+
+            y = y.to(self.device).squeeze(-2)
             r = r.to(self.device)
             t = t.to(self.device)
 
             # forward the model
             with torch.set_grad_enabled(is_train):
                 # logits, loss = model(x, y, r)
-                logits, loss = self._evaluate_actions_wrapper(x, y, y, r, t)
+                loss = self.transformer_policy(x, y, y, r, t)
                 loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
                 losses.append(loss.item())
 
@@ -566,17 +601,18 @@ class TransformerTrainer(BaseRLTrainer):
                 # backprop and update the parameters
                 self.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.transformer_policy.parameters(), self.config.TRANSFORMER.grad_norm_clip)
+                torch.nn.utils.clip_grad_norm_(self.transformer_policy.parameters(), self.config.RL.TRANSFORMER.grad_norm_clip)
                 self.optimizer.step()
 
                 # report progress
                 pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
 
+        loss_log = {}
         if is_train:
-            loss["train"] = float(np.mean(losses))
+            loss_log["train"] = float(np.mean(losses))
         else:
-            loss["test"] = float(np.mean(losses))
-        return loss
+            loss_log["test"] = float(np.mean(losses))
+        return loss_log
 
     @profiling_wrapper.RangeContext("train")
     def train(self) -> None:
@@ -658,18 +694,22 @@ class TransformerTrainer(BaseRLTrainer):
                     return
 
                     # Question. 
+                if self._is_distributed:
+                    self.train_loader.sampler.set_epoch(self.num_updates_done)
 
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
+
+                loss = self._all_reduce(loss)
 
                 if self.config.RL.TRANSFORMER.use_linear_lr_decay:
                     lr_scheduler.step()  # type: ignore
 
                 self.num_updates_done += 1
 
-                self._training_log(writer, loss, prev_time)
+                # self._training_log(writer, loss, prev_time)
 
                 # checkpoint model
-                if rank0_only() and self.should_checkpoint():
+                if rank0_only(): #  and self.should_checkpoint()
                     self.save_checkpoint(
                         f"ckpt.{count_checkpoints}.pth",
                         dict(
@@ -680,8 +720,6 @@ class TransformerTrainer(BaseRLTrainer):
                     count_checkpoints += 1
 
                 profiling_wrapper.range_pop()  # train update
-
-            self.envs.close()
 
     def _eval_checkpoint(
         self,
@@ -745,12 +783,9 @@ class TransformerTrainer(BaseRLTrainer):
                 action_shape = (1,)
                 discrete_actions = True
 
-        self._init_model()
+        self._setup_transformer_policy()
 
-        try:
-            self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
-        except Exception as e:
-            print(e)
+        self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
 
         observations = self.envs.reset()
         batch = batch_obs(
@@ -817,7 +852,7 @@ class TransformerTrainer(BaseRLTrainer):
                 logger.warn(f"Evaluating with {total_num_eps} instead.")
                 number_of_eval_episodes = total_num_eps
 
-        pbar = tqdm.tqdm(total=number_of_eval_episodes)
+        pbar = tqdm(total=number_of_eval_episodes)
         self.transformer_policy.eval()
 
         while (
@@ -927,6 +962,18 @@ class TransformerTrainer(BaseRLTrainer):
 
                         rgb_frames[i] = []
 
+
+                    num_episodes = len(stats_episodes)
+                    aggregated_stats = {}
+                    for stat_key in next(iter(stats_episodes.values())).keys():
+                        aggregated_stats[stat_key] = (
+                            sum(v[stat_key] for v in stats_episodes.values())
+                            / num_episodes
+                        )
+
+                    for k, v in aggregated_stats.items():
+                        logger.info(f"Average episode {k}: {v:.4f}")
+
                 # episode continues
                 elif len(self.config.VIDEO_OPTION) > 0:
                     # TODO move normalization / channel changing out of the policy and undo it here
@@ -958,8 +1005,6 @@ class TransformerTrainer(BaseRLTrainer):
                 timesteps,
                 rgb_frames,
             )
-
-            print(timesteps[0,0,0])
 
         num_episodes = len(stats_episodes)
         aggregated_stats = {}
