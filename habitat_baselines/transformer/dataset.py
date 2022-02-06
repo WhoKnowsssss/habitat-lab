@@ -9,6 +9,7 @@ from torch.utils.data import (
     Dataset, 
     IterableDataset, 
     RandomSampler,
+    SequentialSampler,
     DistributedSampler,
     get_worker_info
 )
@@ -61,12 +62,10 @@ class StateActionReturnDataset(Dataset):
         stepwise_returns = []
 
         path = config.trajectory_dir
+        print(path)
         filenames = os.listdir(path)
         
         filenames.remove("model.pth")
-
-        filenames.remove("pick_100_0.pt")
-        filenames.remove("pick_100_1.pt")
 
         print("selecting from files:", filenames)
         transitions_per_buffer = np.zeros(len(filenames), dtype=int)
@@ -103,7 +102,7 @@ class StateActionReturnDataset(Dataset):
                     i += 1
                     buffer_index += 1
                     
-                    if i >= 100000:
+                    if i >= 110000:
                         obss = obss[:curr_num_transitions]
                         actions = actions[:curr_num_transitions]
                         stepwise_returns = stepwise_returns[:curr_num_transitions]
@@ -154,9 +153,15 @@ class RollingDataset(IterableDataset):
     class DatasetIterator:
         dataset: StateActionReturnDataset
 
-        def __init__(self, config: Config, context_length: int, sampler_params: Tuple):
-            self.config = Config
+        def __init__(self, 
+            config: Config, 
+            context_length: int, 
+            sampler_params: Tuple, 
+            dataset_context: Dict
+        ):
+            self.config = config
             self.context_length = context_length
+            self.dataset_context = dataset_context
             self.iters_per_load = config.iters_per_load
             num_replicas, rank, self.seed = sampler_params
             assert (num_replicas is None == rank is None), "Local or Distributed Training? "
@@ -168,24 +173,32 @@ class RollingDataset(IterableDataset):
                 self._is_distributed = True
             
             self.init_dataset()
+
+            self.num_iterated = 0
+            self.num_iterated_epoch = 0
+
+            self.a = 2
             
         def init_dataset(self):
-            self.num_iterated = 0
-            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length)
+            # self.num_iterated = 0
+            if self.dataset_context['need_init']:
+                self.dataset_context['dataset'] = StateActionReturnDataset.from_config(self.config, self.context_length)
             self.length = len(self.dataset)
             if self._is_distributed:
                 self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=self.seed, drop_last=True)
             else:
-                self.sampler = RandomSampler(self.dataset)
+                self.sampler = SequentialSampler(self.dataset) # RandomSampler
 
         def __iter__(self):
-            self.num_iterated_epoch = 0
+            # self.num_iterated_epoch = 0
+
             self.sampler_iterator = iter(self.sampler)
 
             worker_info = get_worker_info()
             self.num_workers = 0
             if worker_info is not None: 
                 self.num_workers = worker_info.num_workers - 1
+                self.id = worker_info.id
                 self.iters_per_load = self.iters_per_load // worker_info.num_workers
                 self.length = self.length // worker_info.num_workers
                 next(its.islice(self.sampler_iterator, worker_info.id, worker_info.id), None)
@@ -193,21 +206,23 @@ class RollingDataset(IterableDataset):
             return self
 
         def __next__(self):
-            if self.num_iterated_epoch > self.length:
+            if self.num_iterated_epoch >= self.length:
                 self.num_iterated += self.num_iterated_epoch
-                raise StopIteration
-            elif self.num_iterated > self.iters_per_load:
+            if self.num_iterated >= self.iters_per_load:
                 self.init_dataset()
                 raise StopIteration
-                
+            
             self.num_iterated_epoch += 1
-            item = self.dataset.__getitem__(next(self.sampler_iterator))
+            self.num_iterated = self.num_iterated_epoch
+            idx = next(self.sampler_iterator)
+            item = self.dataset.__getitem__(idx)
+            print("idx: " ,idx, "worker id: ", self.id, "num_it: ", self.num_iterated)
             next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
             return item
 
         
-    def __init__(self, config: Config, context_length: int, sampler_params: Tuple):
-        self.iterator = self.DatasetIterator(config, context_length, sampler_params)
+    def __init__(self, config: Config, context_length: int, sampler_params: Tuple, dataset_context: dict):
+        self.iterator = self.DatasetIterator(config, context_length, sampler_params, dataset_context)
         
 
     def __iter__(self):
