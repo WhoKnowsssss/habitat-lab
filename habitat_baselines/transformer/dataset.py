@@ -3,9 +3,56 @@ import os, pickle
 import numpy as np
 import torch
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from habitat.config import Config
+
+class RollingDataset(IterableDataset):
+
+    class DatasetIterator:
+        self.dataset: StateActionReturnDataset
+        def __init__(self, config: Config, context_length: int):
+            self.config = Config
+            self.context_length = context_length
+            self.iters_per_load = config.iters_per_load
+            init_dataset()
+            
+
+        def init_dataset(self):
+            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length)
+            self.length = len(self.dataset)
+            self.indices = np.random.shuffle(np.arange(self.length))
+            self.num_iterated = 0
+            
+
+        def __iter__(self):
+            self.num_iterated_epoch = 0
+
+            worker_info = get_worker_info()
+            if worker_info is not None: 
+                self.iters_per_load = self.iters_per_load // worker_info.num_workers
+                self.length = self.length // worker_info.num_workers
+                self.indices = self.indices[worker_info.id * self.length : (worker_info.id + 1) * self.length]
+            
+            return self
+
+        def __next__(self):
+            if self.num_iterated_epoch > self.length:
+                self.num_iterated += self.num_iterated_epoch
+                raise StopIteration
+            elif self.num_iterated > self.iters_per_load:
+                init_dataset()
+                raise StopIteration
+                
+            self.num_iterated_epoch += 1
+            return self.dataset.__getitem__(self.indices[self.num_iterated_epoch-1])
+                
+
+    def __init__(self, config: Config, context_length: int):
+        self.iterator = DatasetIterator(config, context_length)
+
+    def __iter__(self):
+        return iter(self.iterator)
 
 class StateActionReturnDataset(Dataset):
 

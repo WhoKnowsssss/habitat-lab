@@ -39,8 +39,9 @@ RL:
 
   TRAJECTORY_DATASET:
     trajectory_dir: "/srv/cvmlp-lab/share/aszot3/share_demos"
-    steps_per_training: 10000
-    trajs_per_file: 5000
+    steps_per_training: 1.0E+5
+    trajs_per_file: 1.0E+4
+    iters_per_load: 4.0E+5
 
   TRANSFORMER:
     lr: 1.0E-4
