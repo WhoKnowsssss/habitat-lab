@@ -279,13 +279,11 @@ class TransformerTrainer(BaseRLTrainer):
                                 seed=self.config.TASK_CONFIG.SEED
                             )
             
-        self.train_loader = DataLoader(self.train_dataset, shuffle=True, pin_memory=True,
+        self.train_loader = DataLoader(self.train_dataset, shuffle=(self.sampler is None), pin_memory=True,
                                 batch_size=self.config.RL.TRANSFORMER.batch_size,
                                 num_workers=self.config.RL.TRANSFORMER.num_workers, 
                                 sampler=self.sampler,
                             )
-
-        self.init
 
         self.optimizer = torch.optim.Adam(
             list(filter(lambda p: p.requires_grad, self.transformer_policy.parameters())),

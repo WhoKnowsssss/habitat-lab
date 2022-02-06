@@ -38,7 +38,7 @@ RL:
   GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position']
 
   TRAJECTORY_DATASET:
-    trajectory_dir: "data/temp_data"
+    trajectory_dir: "/srv/cvmlp-lab/share/aszot3/share_demos"
     steps_per_training: 10000
     trajs_per_file: 5000
 
@@ -48,7 +48,7 @@ RL:
     grad_norm_clip: 1.0
     use_linear_lr_decay: True
     batch_size: 128
-    num_workers: 4
+    num_workers: 2
 
 
 
@@ -78,7 +78,7 @@ RL:
     # The PyTorch distributed backend to use
     distrib_backend: NCCL
     # Visual encoder backbone
-    pretrained_weights: data/temp_data/model.pth # data/ddppo-models/gibson-2plus-resnet50.pth
+    pretrained_weights: /srv/cvmlp-lab/share/aszot3/share_demos/model.pth # data/ddppo-models/gibson-2plus-resnet50.pth
     # Initialize with pretrained weights
     pretrained: False
     # Initialize just the visual encoder backbone with pretrained weights

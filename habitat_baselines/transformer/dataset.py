@@ -54,7 +54,13 @@ class StateActionReturnDataset(Dataset):
 
         path = config.trajectory_dir
         filenames = os.listdir(path)
+        
         filenames.remove("model.pth")
+
+        filenames.remove("pick_100_0.pt")
+        filenames.remove("pick_100_1.pt")
+
+        print("selecting from files:", filenames)
         transitions_per_buffer = np.zeros(len(filenames), dtype=int)
         num_trajectories = 0
         while len(obss) < config.steps_per_training:
