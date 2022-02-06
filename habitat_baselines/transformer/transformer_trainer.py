@@ -691,7 +691,6 @@ class TransformerTrainer(BaseRLTrainer):
 
                     return
 
-                    # Question. 
                 if self._is_distributed:
                     self.train_loader.sampler.set_epoch(self.num_updates_done)
 

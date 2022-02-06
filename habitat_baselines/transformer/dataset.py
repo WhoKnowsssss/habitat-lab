@@ -1,58 +1,19 @@
 import os, pickle
+from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
+import itertools as its
 
 import numpy as np
 import torch
 
-from torch.utils.data import Dataset, IterableDataset, get_worker_info
+from torch.utils.data import (
+    Dataset, 
+    IterableDataset, 
+    RandomSampler,
+    DistributedSampler,
+    get_worker_info
+)
 
 from habitat.config import Config
-
-class RollingDataset(IterableDataset):
-
-    class DatasetIterator:
-        self.dataset: StateActionReturnDataset
-        def __init__(self, config: Config, context_length: int):
-            self.config = Config
-            self.context_length = context_length
-            self.iters_per_load = config.iters_per_load
-            init_dataset()
-            
-
-        def init_dataset(self):
-            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length)
-            self.length = len(self.dataset)
-            self.indices = np.random.shuffle(np.arange(self.length))
-            self.num_iterated = 0
-            
-
-        def __iter__(self):
-            self.num_iterated_epoch = 0
-
-            worker_info = get_worker_info()
-            if worker_info is not None: 
-                self.iters_per_load = self.iters_per_load // worker_info.num_workers
-                self.length = self.length // worker_info.num_workers
-                self.indices = self.indices[worker_info.id * self.length : (worker_info.id + 1) * self.length]
-            
-            return self
-
-        def __next__(self):
-            if self.num_iterated_epoch > self.length:
-                self.num_iterated += self.num_iterated_epoch
-                raise StopIteration
-            elif self.num_iterated > self.iters_per_load:
-                init_dataset()
-                raise StopIteration
-                
-            self.num_iterated_epoch += 1
-            return self.dataset.__getitem__(self.indices[self.num_iterated_epoch-1])
-                
-
-    def __init__(self, config: Config, context_length: int):
-        self.iterator = DatasetIterator(config, context_length)
-
-    def __iter__(self):
-        return iter(self.iterator)
 
 class StateActionReturnDataset(Dataset):
 
@@ -187,3 +148,67 @@ class StateActionReturnDataset(Dataset):
             rtg, 
             timesteps
         )
+
+class RollingDataset(IterableDataset):
+
+    class DatasetIterator:
+        dataset: StateActionReturnDataset
+
+        def __init__(self, config: Config, context_length: int, sampler_params: Tuple):
+            self.config = Config
+            self.context_length = context_length
+            self.iters_per_load = config.iters_per_load
+            num_replicas, rank, self.seed = sampler_params
+            assert (num_replicas is None == rank is None), "Local or Distributed Training? "
+            if num_replicas is None:
+                self._is_distributed = False
+            else:
+                self.num_replicas = num_replicas
+                self.rank = rank
+                self._is_distributed = True
+            
+            self.init_dataset()
+            
+        def init_dataset(self):
+            self.num_iterated = 0
+            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length)
+            self.length = len(self.dataset)
+            if self._is_distributed:
+                self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=self.seed, drop_last=True)
+            else:
+                self.sampler = RandomSampler(self.dataset)
+
+        def __iter__(self):
+            self.num_iterated_epoch = 0
+            self.sampler_iterator = iter(self.sampler)
+
+            worker_info = get_worker_info()
+            self.num_workers = 0
+            if worker_info is not None: 
+                self.num_workers = worker_info.num_workers - 1
+                self.iters_per_load = self.iters_per_load // worker_info.num_workers
+                self.length = self.length // worker_info.num_workers
+                next(its.islice(self.sampler_iterator, worker_info.id, worker_info.id), None)
+
+            return self
+
+        def __next__(self):
+            if self.num_iterated_epoch > self.length:
+                self.num_iterated += self.num_iterated_epoch
+                raise StopIteration
+            elif self.num_iterated > self.iters_per_load:
+                self.init_dataset()
+                raise StopIteration
+                
+            self.num_iterated_epoch += 1
+            item = self.dataset.__getitem__(next(self.sampler_iterator))
+            next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
+            return item
+
+        
+    def __init__(self, config: Config, context_length: int, sampler_params: Tuple):
+        self.iterator = self.DatasetIterator(config, context_length, sampler_params)
+        
+
+    def __iter__(self):
+        return iter(self.iterator)
