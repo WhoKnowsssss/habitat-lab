@@ -10,7 +10,7 @@ import random
 import time
 from collections import defaultdict, deque
 from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
-from multiprocessing import Manager
+
 
 import numpy as np
 import torch
@@ -22,6 +22,7 @@ from torch.utils.data import (
     DataLoader,
     DistributedSampler
 )
+import torch.multiprocessing as mp
 
 from habitat import Config, VectorEnv, logger
 from habitat.utils import profiling_wrapper
@@ -272,8 +273,9 @@ class TransformerTrainer(BaseRLTrainer):
             torch.distributed.barrier()
 
         # self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
+        mp.set_sharing_strategy('file_system')
 
-        manager = Manager()
+        manager = mp.Manager()
         self.dataset_context = manager.dict()
         self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3, (world_size, world_rank, self.config.TASK_CONFIG.SEED), self.dataset_context)
             
