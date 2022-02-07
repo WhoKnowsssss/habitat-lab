@@ -1,4 +1,4 @@
-import os, pickle
+import os, pickle, time
 from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
 import itertools as its
 
@@ -28,6 +28,7 @@ class StateActionReturnDataset(Dataset):
         self.timesteps = timesteps
     
     def __len__(self):
+        assert len(self.data) > self.block_size, "No enough transitions in this dataset"
         return len(self.data) - self.block_size
 
     def __getitem__(self, idx):
@@ -170,55 +171,62 @@ class RollingDataset(IterableDataset):
             else:
                 self.num_replicas = num_replicas
                 self.rank = rank
+                self.iters_per_load = self.iters_per_load // num_replicas
                 self._is_distributed = True
-            
-            self.init_dataset()
 
-            self.num_iterated = 0
+            self.dataset_context['num_iterated'] = 0
+            self.dataset_context['need_init'] = True
             self.num_iterated_epoch = 0
-
-            self.a = 2
             
         def init_dataset(self):
             # self.num_iterated = 0
-            if self.dataset_context['need_init']:
-                self.dataset_context['dataset'] = StateActionReturnDataset.from_config(self.config, self.context_length)
-            self.length = len(self.dataset)
-            if self._is_distributed:
-                self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=self.seed, drop_last=True)
-            else:
-                self.sampler = SequentialSampler(self.dataset) # RandomSampler
+            assert (self.dataset_context['need_init'] == True), "Error: Already initialized"
+            self.dataset_context['dataset'] = StateActionReturnDataset.from_config(self.config, self.context_length)
+            self.dataset_context['need_init'] = False
 
         def __iter__(self):
             # self.num_iterated_epoch = 0
-
-            self.sampler_iterator = iter(self.sampler)
-
             worker_info = get_worker_info()
             self.num_workers = 0
+            
+            if worker_info is not None: 
+                self.id = worker_info.id
+
+            if self.dataset_context['need_init']:
+                if worker_info is None or worker_info.id == 0:
+                    self.init_dataset()
+                else: 
+                    while self.dataset_context['need_init']:
+                        time.sleep(0.1)
+            if self._is_distributed:
+                self.sampler = DistributedSampler(self.dataset_context['dataset'], num_replicas=self.num_replicas, rank=self.rank, seed=self.seed, drop_last=True)
+            else:
+                self.sampler = SequentialSampler(self.dataset_context['dataset']) # RandomSampler
+            self.sampler_iterator = iter(self.sampler)
+
             if worker_info is not None: 
                 self.num_workers = worker_info.num_workers - 1
-                self.id = worker_info.id
-                self.iters_per_load = self.iters_per_load // worker_info.num_workers
-                self.length = self.length // worker_info.num_workers
                 next(its.islice(self.sampler_iterator, worker_info.id, worker_info.id), None)
 
             return self
 
         def __next__(self):
-            if self.num_iterated_epoch >= self.length:
-                self.num_iterated += self.num_iterated_epoch
-            if self.num_iterated >= self.iters_per_load:
-                self.init_dataset()
-                raise StopIteration
-            
             self.num_iterated_epoch += 1
-            self.num_iterated = self.num_iterated_epoch
-            idx = next(self.sampler_iterator)
-            item = self.dataset.__getitem__(idx)
-            print("idx: " ,idx, "worker id: ", self.id, "num_it: ", self.num_iterated)
+            try:
+                idx = next(self.sampler_iterator)
+            except StopIteration:
+                self.dataset_context['num_iterated'] += self.num_iterated_epoch
+                if self.dataset_context['num_iterated'] >= self.iters_per_load:
+                    self.dataset_context['need_init'] = True
+                raise StopIteration
+
+            item = self.dataset_context['dataset'].__getitem__(idx)
+            print("idx: " ,idx, "worker id: ", self.id, "num_it: ", self.dataset_context['num_iterated'])
             next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
             return item
+
+        def set_epoch(self, epoch):
+            self.sampler.set_epoch(epoch)
 
         
     def __init__(self, config: Config, context_length: int, sampler_params: Tuple, dataset_context: dict):
@@ -227,3 +235,6 @@ class RollingDataset(IterableDataset):
 
     def __iter__(self):
         return iter(self.iterator)
+
+    def set_epoch(self, epoch):
+        self.iterator.set_epoch(epoch)

@@ -10,6 +10,7 @@ import random
 import time
 from collections import defaultdict, deque
 from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
+from multiprocessing import Manager
 
 import numpy as np
 import torch
@@ -57,7 +58,7 @@ from habitat_baselines.transformer.policy import (
     TransformerResNetPolicy,
     Policy,
 )
-from habitat_baselines.transformer.dataset import StateActionReturnDataset
+from habitat_baselines.transformer.dataset import RollingDataset
 from habitat_baselines.utils.common import (
     ObservationBatchingCache,
     action_array_to_dict,
@@ -204,6 +205,7 @@ class TransformerTrainer(BaseRLTrainer):
         if is_slurm_batch_job():
             add_signal_handlers()
 
+        world_rank, world_size = None, None
         if self._is_distributed:
             local_rank, tcp_store = init_distrib_slurm(
                 self.config.RL.TRANSFORMER.distrib_backend
@@ -269,20 +271,15 @@ class TransformerTrainer(BaseRLTrainer):
             self.init_distributed(find_unused_params=True)
             torch.distributed.barrier()
 
-        self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
-        self.sampler = None
-        if self._is_distributed:
-            self.sampler = DistributedSampler(self.train_dataset,
-                                num_replicas=world_size,
-                                rank=world_rank,
-                                shuffle=True,
-                                seed=self.config.TASK_CONFIG.SEED
-                            )
+        # self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
+
+        manager = Manager()
+        self.dataset_context = manager.dict()
+        self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3, (world_size, world_rank, self.config.TASK_CONFIG.SEED), self.dataset_context)
             
-        self.train_loader = DataLoader(self.train_dataset, shuffle=(self.sampler is None), pin_memory=True,
+        self.train_loader = DataLoader(self.train_dataset, pin_memory=True,
                                 batch_size=self.config.RL.TRANSFORMER.batch_size,
                                 num_workers=self.config.RL.TRANSFORMER.num_workers, 
-                                sampler=self.sampler,
                             )
 
         self.optimizer = torch.optim.Adam(
@@ -575,7 +572,7 @@ class TransformerTrainer(BaseRLTrainer):
         is_train = split == 'train'
         self.transformer_policy.train(is_train)
 
-        pbar = tqdm(enumerate(self.train_loader), total=len(self.train_loader)) if is_train else enumerate(self.train_loader)
+        pbar = tqdm(enumerate(self.train_loader)) # #  # if is_train else enumerate(self.train_loader)
         losses = []
         for it, (x, y, r, t) in pbar:
 
@@ -692,7 +689,7 @@ class TransformerTrainer(BaseRLTrainer):
                     return
 
                 if self._is_distributed:
-                    self.train_loader.sampler.set_epoch(self.num_updates_done)
+                    self.train_dataset.set_epoch(self.num_updates_done)
 
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 
