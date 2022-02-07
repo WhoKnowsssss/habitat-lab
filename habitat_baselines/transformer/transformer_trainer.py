@@ -215,7 +215,7 @@ class TransformerTrainer(BaseRLTrainer):
             world_size = torch.distributed.get_world_size()
             if rank0_only():
                 logger.info(
-                    "Initialized DD-PPO with {} workers".format(
+                    "Initialized Skill Transformer with {} workers".format(
                         world_size
                     )
                 )
@@ -273,8 +273,6 @@ class TransformerTrainer(BaseRLTrainer):
             torch.distributed.barrier()
 
         # self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
-        mp.set_sharing_strategy('file_system')
-
         manager = mp.Manager()
         self.dataset_context = manager.dict()
         self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3, (world_size, world_rank, self.config.TASK_CONFIG.SEED), self.dataset_context)
@@ -690,8 +688,7 @@ class TransformerTrainer(BaseRLTrainer):
 
                     return
 
-                if self._is_distributed:
-                    self.train_dataset.set_epoch(self.num_updates_done)
+                self.train_dataset.set_epoch(self.num_updates_done)
 
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 

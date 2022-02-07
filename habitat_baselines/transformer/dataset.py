@@ -1,6 +1,7 @@
 import os, pickle, time
 from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
 import itertools as its
+from collections import deque
 
 import numpy as np
 import torch
@@ -14,7 +15,7 @@ from torch.utils.data import (
     get_worker_info
 )
 
-from habitat.config import Config
+from habitat import Config, logger
 
 class StateActionReturnDataset(Dataset):
 
@@ -55,6 +56,8 @@ class StateActionReturnDataset(Dataset):
         cls,
         config: Config,
         context_length: int=30,
+        rng: np.random.Generator=None,
+        verbose: bool=False
     ):
         obss = []
         actions = []
@@ -63,26 +66,36 @@ class StateActionReturnDataset(Dataset):
         stepwise_returns = []
 
         path = config.trajectory_dir
-        print(path)
+
         filenames = os.listdir(path)
         
         filenames.remove("model.pth")
 
-        print("selecting from files:", filenames)
+        if verbose:
+            logger.info(
+                "Trajectory Files: {}".format(
+                    filenames
+                )
+            )
+
         transitions_per_buffer = np.zeros(len(filenames), dtype=int)
         num_trajectories = 0
-        while len(obss) < config.steps_per_training:
-            buffer_num = np.random.choice(np.arange(len(filenames)), 1)[0]
+        while len(obss) < config.steps_per_load:
+            buffer_num = rng.choice(np.arange(len(filenames)), 1)[0]
             i = transitions_per_buffer[buffer_num]
-            print('loading from buffer %d which has %d already loaded' % (buffer_num, i))
-
+            if verbose:
+                logger.info(
+                    "Loading from buffer {} which has {} already loaded".format(
+                        buffer_num, i
+                    )
+                )
             file = os.path.join(path, filenames[buffer_num])
             if os.path.exists(file):
                 dataset_raw = torch.load(file)
                 done = False
                 curr_num_transitions = len(obss)
                 trajectories_to_load = config.trajs_per_file
-                buffer_index = np.random.randint(0, dataset_raw["actions"].shape[0])
+                buffer_index = rng.integers(0, dataset_raw["actions"].shape[0])
                 while not done:
                     # states, ac, ret, next_states, next_action, next_reward, terminal, indices = frb.sample_transition_batch(batch_size=1, indices=[i])
                     states, ac, ret, terminal = {k:dataset_raw["obs"][k][buffer_index] for k in dataset_raw["obs"].keys()}, dataset_raw["actions"][buffer_index].numpy(), [dataset_raw["rewards"][buffer_index].numpy()], [dataset_raw["done"][buffer_index].numpy()]
@@ -98,7 +111,7 @@ class StateActionReturnDataset(Dataset):
                             done = True
                         else:
                             trajectories_to_load -= 1
-                            buffer_index = np.random.randint(0, dataset_raw["actions"].shape[0])
+                            buffer_index = rng.integers(0, dataset_raw["actions"].shape[0])
                     returns[-1] += ret[0]
                     i += 1
                     buffer_index += 1
@@ -112,7 +125,12 @@ class StateActionReturnDataset(Dataset):
                         done = True
                 num_trajectories += (config.trajs_per_file - trajectories_to_load)
                 transitions_per_buffer[buffer_num] = i
-            print('this buffer has %d loaded transitions and there are now %d transitions total divided into %d trajectories' % (i, len(obss), num_trajectories))
+            if verbose:
+                logger.info(
+                    "This buffer has {} loaded transitions and there are now {} transitions total divided into {} trajectories. ".format(
+                        i, len(obss), num_trajectories
+                    )
+                )
 
         actions = np.array(actions)
         returns = np.array(returns)
@@ -129,7 +147,7 @@ class StateActionReturnDataset(Dataset):
                 rtg_j = curr_traj_returns[j-start_index:i-start_index]
                 rtg[j] = sum(rtg_j)
             start_index = i
-        print('max rtg is %d' % max(rtg))
+        # print('max rtg is %d' % max(rtg))
 
         # -- create timestep dataset
         start_index = 0
@@ -138,7 +156,14 @@ class StateActionReturnDataset(Dataset):
             i = int(i)
             timesteps[start_index:i+1] = np.arange(i+1 - start_index)
             start_index = i+1
-        print('max timestep is %d' % max(timesteps))
+        # print('max timestep is %d' % max(timesteps))
+
+        if verbose:
+            logger.info(
+                "In this load, max rtg is {}, max timestep is {}. ".format(
+                    round(max(rtg),2), max(timesteps)
+                )
+            )
 
         return cls(
             obss, 
@@ -163,7 +188,7 @@ class RollingDataset(IterableDataset):
             self.config = config
             self.context_length = context_length
             self.dataset_context = dataset_context
-            self.iters_per_load = config.iters_per_load
+            self.steps_to_reload = config.steps_to_reload
             num_replicas, rank, self.seed = sampler_params
             assert (num_replicas is None == rank is None), "Local or Distributed Training? "
             if num_replicas is None:
@@ -171,30 +196,19 @@ class RollingDataset(IterableDataset):
             else:
                 self.num_replicas = num_replicas
                 self.rank = rank
-                self.iters_per_load = self.iters_per_load // num_replicas
+                self.steps_to_reload = self.steps_to_reload // num_replicas
                 self._is_distributed = True
 
             self.dataset_context['num_iterated'] = 0
-            # self.dataset_context['need_init'] = True
             self.dataset_context['num_init'] = 0
-            self.dataset_context["shared_dataset"] = None
             self.num_iterated_epoch = 0
             
-        def init_dataset(self, _to_copy):
-            assert (self.dataset_context['num_init'] != -1), "Error: Already initialized"
+        def init_dataset(self):
 
-            if _to_copy:
-                while self.dataset_context["shared_dataset"] is None:
-                    time.sleep(0.1)
-                start = time.time()
-                self.dataset = self.dataset_context["shared_dataset"]
-                print("load", time.time() - start)
-            else:
-                self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length, )
-                # torch.save(self.dataset, "/home/haytham/testfile")
-                start = time.time()
-                self.dataset_context["shared_dataset"] = self.dataset
-                print(time.time() - start)
+            assert hasattr(self, 'seed_epoch'), "Set epoch before Dataloader loads"
+            rng = np.random.default_rng(self.seed + self.seed_epoch)
+
+            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length, rng, (self.id == 0))
                   
             self.dataset_context['num_init'] += 1
 
@@ -204,27 +218,22 @@ class RollingDataset(IterableDataset):
                 self.sampler = SequentialSampler(self.dataset) # RandomSampler
 
         def __iter__(self):
-            # self.num_iterated_epoch = 0
             worker_info = get_worker_info()
-            self.num_workers = 0
-            
+            self.num_workers = worker_info.num_workers - 1 if worker_info is not None else 0
+            self.id = worker_info.id if worker_info is not None else 0
+
             if worker_info is not None: 
                 self.id = worker_info.id
 
-            if self.dataset_context['num_init'] != -1:
-                self.init_dataset((worker_info is not None and worker_info.id != 0))
+            self.init_dataset()
 
             self.sampler_iterator = iter(self.sampler)
 
             if worker_info is not None: 
                 if self.dataset_context['num_init'] == worker_info.num_workers:
-                    # self.dataset_context['need_init'] = False
                     self.dataset_context['num_init'] = -1
-                    self.dataset_context["shared_dataset"] = None
-                self.num_workers = worker_info.num_workers - 1
                 next(its.islice(self.sampler_iterator, worker_info.id, worker_info.id), None)
             else:
-                # self.dataset_context['need_init'] = False
                 self.dataset_context['num_init'] = -1
 
             return self
@@ -238,20 +247,20 @@ class RollingDataset(IterableDataset):
             except StopIteration:
                 self.dataset_context['num_iterated'] += self.num_iterated_epoch
                 
-                if self.dataset_context['num_iterated'] >= self.iters_per_load:
+                if self.dataset_context['num_iterated'] >= self.steps_to_reload:
                     self.dataset_context['num_iterated'] = 0
                     self.dataset_context['num_init'] = 0
-                    # self.dataset_context['need_init'] = True
                 
                 raise StopIteration
 
             item = self.dataset.__getitem__(idx)
-            # print("worker id", self.id, "idx ", idx)
             next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
             return item
 
         def set_epoch(self, epoch):
-            self.sampler.set_epoch(epoch)
+            if self._is_distributed:
+                self.sampler.set_epoch(epoch)
+            self.seed_epoch = epoch
 
         
     def __init__(self, config: Config, context_length: int, sampler_params: Tuple, dataset_context: dict):
