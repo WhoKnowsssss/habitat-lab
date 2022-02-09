@@ -1,4 +1,5 @@
 import os, pickle, time
+from this import d
 from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
 import itertools as its
 from collections import deque
@@ -91,14 +92,14 @@ class StateActionReturnDataset(Dataset):
                 )
             file = os.path.join(path, filenames[buffer_num])
             if os.path.exists(file):
-                dataset_raw = torch.load(file)
+                dataset_raw = torch.load(file, map_location=torch.device('cpu'))
                 done = False
                 curr_num_transitions = len(obss)
                 trajectories_to_load = config.trajs_per_file
-                buffer_index = rng.integers(0, dataset_raw["actions"].shape[0])
+                buffer_index = rng.integers(0, len(dataset_raw["actions"]))
                 while not done:
                     # states, ac, ret, next_states, next_action, next_reward, terminal, indices = frb.sample_transition_batch(batch_size=1, indices=[i])
-                    states, ac, ret, terminal = {k:dataset_raw["obs"][k][buffer_index] for k in dataset_raw["obs"].keys()}, dataset_raw["actions"][buffer_index].numpy(), [dataset_raw["rewards"][buffer_index].numpy()], [dataset_raw["done"][buffer_index].numpy()]
+                    states, ac, ret, terminal = {k:dataset_raw["obs"][buffer_index][k] for k in dataset_raw["obs"][0].keys()}, dataset_raw["actions"][buffer_index].numpy(), [dataset_raw["rewards"][buffer_index].numpy()], [not dataset_raw["masks"][buffer_index].numpy()]
                     # states = states.transpose((0, 3, 1, 2))[0] # (1, 84, 84, 4) --> (4, 84, 84)
                     obss += [states]
                     actions += [ac] if ac.shape[0] > 1 else [ac[0]]
@@ -111,7 +112,7 @@ class StateActionReturnDataset(Dataset):
                             done = True
                         else:
                             trajectories_to_load -= 1
-                            buffer_index = rng.integers(0, dataset_raw["actions"].shape[0])
+                            buffer_index = rng.integers(0, len(dataset_raw["actions"]))
                     returns[-1] += ret[0]
                     i += 1
                     buffer_index += 1
@@ -133,7 +134,7 @@ class StateActionReturnDataset(Dataset):
                 )
 
         actions = np.array(actions)
-        returns = np.array(returns)
+        returns = np.array(returns, dtype=np.float32)
         stepwise_returns = np.array(stepwise_returns)
         done_idxs = np.array(done_idxs)
 
@@ -161,7 +162,7 @@ class StateActionReturnDataset(Dataset):
         if verbose:
             logger.info(
                 "In this load, max rtg is {}, max timestep is {}. ".format(
-                    round(max(rtg),2), max(timesteps)
+                    rtg.max().round(2), timesteps.max()
                 )
             )
 
@@ -245,8 +246,8 @@ class RollingDataset(IterableDataset):
             try:
                 idx = next(self.sampler_iterator)
             except StopIteration:
-                self.dataset_context['num_iterated'] += self.num_iterated_epoch
                 
+                self.dataset_context['num_iterated'] += self.num_iterated_epoch
                 if self.dataset_context['num_iterated'] >= self.steps_to_reload:
                     self.dataset_context['num_iterated'] = 0
                     self.dataset_context['num_init'] = 0
@@ -265,7 +266,6 @@ class RollingDataset(IterableDataset):
         
     def __init__(self, config: Config, context_length: int, sampler_params: Tuple, dataset_context: dict):
         self.iterator = self.DatasetIterator(config, context_length, sampler_params, dataset_context)
-        
 
     def __iter__(self):
         return iter(self.iterator)

@@ -581,7 +581,7 @@ class TransformerTrainer(BaseRLTrainer):
             x = [{idx2: x[idx1][idx2].to(self.device) for idx2 in x[idx1].keys()} for idx1 in range(len(x))]
 
             y = y.to(self.device).squeeze(-2)
-            r = r.to(self.device)
+            r = r.to(self.device).squeeze(-2)
             t = t.to(self.device)
 
             # forward the model
