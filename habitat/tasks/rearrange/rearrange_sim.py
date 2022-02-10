@@ -4,6 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os.path as osp
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -21,10 +22,11 @@ from habitat.tasks.rearrange.rearrange_grasp_manager import (
 )
 from habitat.tasks.rearrange.utils import (
     IkHelper,
-    get_nav_mesh_settings,
+    get_aabb,
     is_pb_installed,
     make_render_only,
 )
+from habitat_sim.nav import NavMeshSettings
 from habitat_sim.physics import MotionType
 
 # flake8: noqa
@@ -37,7 +39,15 @@ class RearrangeSim(HabitatSim):
         super().__init__(config)
 
         agent_config = self.habitat_config
-        self.navmesh_settings = get_nav_mesh_settings(self._get_agent_config())
+
+        agent_cfg = self._get_agent_config()
+
+        self.navmesh_settings = NavMeshSettings()
+        self.navmesh_settings.set_defaults()
+        self.navmesh_settings.agent_radius = agent_cfg.RADIUS
+        self.navmesh_settings.agent_height = agent_cfg.HEIGHT
+        self.navmesh_settings.agent_max_climb = 0.05
+
         self.first_setup = True
         self.ep_info: Optional[Config] = None
         self.prev_loaded_navmesh = None
@@ -154,17 +164,12 @@ class RearrangeSim(HabitatSim):
 
         config["SCENE"] = ep_info["scene_id"]
 
-        super().reconfigure(config)
+        super().reconfigure(config, should_close_on_new_scene=False)
+
         self.ref_handle_to_rigid_obj_id = {}
 
         self.ep_info = ep_info
         self._try_acquire_context()
-
-        self._targets = {}
-        for target_handle, transform in self.ep_info["targets"].items():
-            self._targets[target_handle] = mn.Matrix4(
-                [[transform[j][i] for j in range(4)] for i in range(4)]
-            )
 
         new_scene = self.prev_scene_id != ep_info["scene_id"]
 
@@ -177,10 +182,6 @@ class RearrangeSim(HabitatSim):
 
             self.robot.reconfigure()
             self._prev_obj_names = None
-
-            # Reset all vis info
-            self.viz_ids = defaultdict(lambda: None)
-            self._viz_objs = {}
 
         self.grasp_mgr.reset()
 
@@ -235,6 +236,7 @@ class RearrangeSim(HabitatSim):
 
         # add episode clutter objects additional to base scene objects
         self._add_objs(ep_info, should_add_objects)
+        self._setup_targets()
 
         self.add_markers(ep_info)
 
@@ -243,9 +245,6 @@ class RearrangeSim(HabitatSim):
             self.sleep_all_objects()
 
         if new_scene:
-            # Recompute the NavMesh once the scene is loaded. Only recompute
-            # the navmesh if the scene is different.
-            # NOTE: because ReplicaCADv3_sc scenes, for example, have STATIC objects with no accompanying NavMesh files
             self._recompute_navmesh()
 
         # Get the starting positions of the target objects.
@@ -275,6 +274,13 @@ class RearrangeSim(HabitatSim):
                 ao: ao.joint_positions for ao in self.art_objs
             }
 
+    def _setup_targets(self):
+        self._targets = {}
+        for target_handle, transform in self.ep_info["targets"].items():
+            self._targets[target_handle] = mn.Matrix4(
+                [[transform[j][i] for j in range(4)] for i in range(4)]
+            )
+
     def get_nav_pos(self, pos):
         pos = mn.Vector3(*pos)
         height_thresh = 0.15
@@ -293,37 +299,65 @@ class RearrangeSim(HabitatSim):
         return use_vs[closest_idx]
 
     def _recompute_navmesh(self):
-        """Generates the navmesh on the fly. This must be called
+        """Generates the navmesh or loads the saved navmesh if it exists. This must be called
         AFTER adding articulated objects to the scene.
         """
 
-        # cache current motiontype and set to STATIC for inclusion in the NavMesh computation
-        motion_types = []
-        for art_obj in self.art_objs:
-            motion_types.append(art_obj.motion_type)
-            art_obj.motion_type = MotionType.STATIC
-        # compute new NavMesh
-        self.recompute_navmesh(
-            self.pathfinder,
-            self.navmesh_settings,
-            include_static_objects=True,
-        )
-        # optionally save the new NavMesh
-        if self.habitat_config.get("SAVE_NAVMESH", False):
-            scene_name = self.ep_info["scene_id"]
-            inferred_path = scene_name.split(".glb")[0] + ".navmesh"
-            self.pathfinder.save_nav_mesh(inferred_path)
-        # reset cached MotionTypes
-        for art_obj, motion_type in zip(self.art_objs, motion_types):
-            art_obj.motion_type = motion_type
+        scene_name = self.ep_info["scene_id"]
+        navmesh_path = scene_name.split(".glb")[0] + ".navmesh"
+
+        if osp.exists(navmesh_path) and not self.habitat_config.get(
+            "FORCE_RECOMPUTE_NAVMESH", False
+        ):
+            self.pathfinder.load_nav_mesh(navmesh_path)
+        else:
+            # cache current motiontype and set to STATIC for inclusion in the NavMesh computation
+            motion_types = []
+            for art_obj in self.art_objs:
+                motion_types.append(art_obj.motion_type)
+                art_obj.motion_type = MotionType.STATIC
+
+            # compute new NavMesh
+            self.recompute_navmesh(
+                self.pathfinder,
+                self.navmesh_settings,
+                include_static_objects=True,
+            )
+            # optionally save the new NavMesh
+            self.pathfinder.save_nav_mesh(navmesh_path)
+            # reset cached MotionTypes
+            for art_obj, motion_type in zip(self.art_objs, motion_types):
+                art_obj.motion_type = motion_type
+
+    def _get_non_frl_objs(self):
+        rom = self.get_rigid_object_manager()
+        return [
+            handle
+            for handle in rom.get_object_handles()
+            if "frl" not in handle
+        ]
 
     def _clear_objects(self, should_add_objects: bool) -> None:
+        rom = self.get_rigid_object_manager()
+
+        # Clear all the rigid objects.
         if should_add_objects:
-            rom = self.get_rigid_object_manager()
             for scene_obj_id in self.scene_obj_ids:
                 if rom.get_library_has_id(scene_obj_id):
                     rom.remove_object_by_id(scene_obj_id)
             self.scene_obj_ids = []
+
+        # Reset all marker visualization points
+        for obj_id in self.viz_ids.values():
+            if rom.get_library_has_id(obj_id):
+                rom.remove_object_by_id(obj_id)
+        self.viz_ids = defaultdict(lambda: None)
+
+        # Remove all object mesh visualizations.
+        for viz_obj in self._viz_objs.values():
+            if rom.get_library_has_id(viz_obj.object_id):
+                rom.remove_object_by_id(viz_obj.object_id)
+        self._viz_objs = {}
 
         # Do not remove the articulated objects from the scene, these are
         # managed by the underlying sim.
@@ -393,17 +427,16 @@ class RearrangeSim(HabitatSim):
             other_obj_handle = (
                 obj_handle.split(".")[0] + f"_:{obj_counts[obj_handle]:04d}"
             )
+            if should_add_objects:
+                self.scene_obj_ids.append(ro.object_id)
 
             if other_obj_handle in self.instance_handle_to_ref_handle:
                 ref_handle = self.instance_handle_to_ref_handle[
                     other_obj_handle
                 ]
-                rel_idx = len(self.scene_obj_ids)
+                rel_idx = self.scene_obj_ids.index(ro.object_id)
                 self.ref_handle_to_rigid_obj_id[ref_handle] = rel_idx
             obj_counts[obj_handle] += 1
-
-            if should_add_objects:
-                self.scene_obj_ids.append(ro.object_id)
 
         ao_mgr = self.get_articulated_object_manager()
         for aoi_handle in ao_mgr.get_object_handles():
@@ -419,20 +452,39 @@ class RearrangeSim(HabitatSim):
         rom = self.get_rigid_object_manager()
         obj_attr_mgr = self.get_object_template_manager()
         for target_handle, transform in self._targets.items():
-            new_target_handle = (
-                target_handle.split("_:")[0] + ".object_config.json"
-            )
-            matching_templates = (
-                obj_attr_mgr.get_templates_by_handle_substring(
-                    new_target_handle
+            # Visualize the goal of the object
+            if self.habitat_config.DEBUG_RENDER_GOAL:
+                new_target_handle = (
+                    target_handle.split("_:")[0] + ".object_config.json"
                 )
+                matching_templates = (
+                    obj_attr_mgr.get_templates_by_handle_substring(
+                        new_target_handle
+                    )
+                )
+                ro = rom.add_object_by_template_handle(
+                    list(matching_templates.keys())[0]
+                )
+                self.set_object_bb_draw(True, ro.object_id)
+                ro.transformation = transform
+                make_render_only(ro, self)
+                bb = get_aabb(ro.object_id, self, True)
+                bb_viz_name1 = target_handle + "_bb1"
+                bb_viz_name2 = target_handle + "_bb2"
+                viz_r = 0.01
+                self.viz_ids[bb_viz_name1] = self.visualize_position(
+                    bb.front_bottom_right, self.viz_ids[bb_viz_name1], viz_r
+                )
+                self.viz_ids[bb_viz_name2] = self.visualize_position(
+                    bb.back_top_left, self.viz_ids[bb_viz_name2], viz_r
+                )
+
+                self._viz_objs[target_handle] = ro
+
+            # Draw a bounding box around the target object
+            self.set_object_bb_draw(
+                True, rom.get_object_by_handle(target_handle).object_id
             )
-            ro = rom.add_object_by_template_handle(
-                list(matching_templates.keys())[0]
-            )
-            ro.transformation = transform
-            make_render_only(ro, self)
-            self._viz_objs[target_handle] = ro
 
     def capture_state(self, with_robot_js=False) -> Dict[str, Any]:
         """
@@ -570,12 +622,6 @@ class RearrangeSim(HabitatSim):
 
             # Also render debug information
             self._create_obj_viz(self.ep_info)
-
-            # Always draw the target
-            for obj_handle, _ in self._targets.items():
-                self.set_object_bb_draw(
-                    True, rom.get_object_by_handle(obj_handle).object_id
-                )
 
             debug_obs = self.get_sensor_observations()
             obs["robot_third_rgb"] = debug_obs["robot_third_rgb"][:, :, :3]

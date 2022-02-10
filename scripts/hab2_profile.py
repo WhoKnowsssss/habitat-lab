@@ -14,10 +14,11 @@ import habitat
 def generate_inits(cfg_path, opts):
     config = habitat.get_config(cfg_path, opts)
     with habitat.Env(config=config) as env:
-        for i in tqdm(range(env.number_of_episodes)):
-            if i % 100 == 0:
-                print(cfg_path, config.DATASET.DATA_PATH)
+        for _ in tqdm(range(10)):
             env.reset()
+
+            for _ in range(5):
+                env.step(env.action_space.sample())
 
 
 parser = argparse.ArgumentParser()

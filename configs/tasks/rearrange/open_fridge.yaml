@@ -3,7 +3,7 @@ ENVIRONMENT:
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/rearrange_pick/replica_cad/v0/rearrange_pick_replica_cad_v0/empty.json.gz
+    DATA_PATH: data/datasets/replica_cad/v0/{split}/empty_50k_1k.json.gz
     SCENES_DIR: "data/replica_cad/"
 TASK:
     TYPE: RearrangeOpenFridgeTask-v0
@@ -85,6 +85,8 @@ TASK:
         FORCE_PEN: 0.0
         MAX_FORCE_PEN: 1.0
         FORCE_END_PEN: 10.0
+    NUM_STEPS:
+        TYPE: "NumStepsMeasure"
 
     MEASUREMENTS:
         - "ROBOT_FORCE"
@@ -94,6 +96,7 @@ TASK:
         - "ART_OBJ_STATE"
         - "ART_OBJ_SUCCESS"
         - "ART_OBJ_REWARD"
+        - "NUM_STEPS"
 
     ACTIONS:
         ARM_ACTION:
@@ -120,15 +123,17 @@ TASK:
 
 SIMULATOR:
     DEBUG_RENDER: False
+    DEBUG_RENDER_GOAL: True
     ACTION_SPACE_CONFIG: v0
     AGENTS: ['AGENT_0']
     ROBOT_JOINT_START_NOISE: 0.0
     CONCUR_RENDER: True
     AUTO_SLEEP: True
+    FORCE_RECOMPUTE_NAVMESH: False
     AGENT_0:
         HEIGHT: 1.5
         IS_SET_START_STATE: False
-        RADIUS: 0.1
+        RADIUS: 0.3
         SENSORS: ['HEAD_RGB_SENSOR', 'HEAD_DEPTH_SENSOR', 'ARM_RGB_SENSOR', 'ARM_DEPTH_SENSOR']
         START_POSITION: [0, 0, 0]
         START_ROTATION: [0, 0, 0, 1]

@@ -4,7 +4,7 @@ ENVIRONMENT:
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/rearrange_pick/replica_cad/v0/rearrange_pick_replica_cad_v0/pick.json.gz
+    DATA_PATH: data/datasets/replica_cad/v0/{split}/no_container_50k_1k.json.gz
     SCENES_DIR: "data/replica_cad/"
 TASK:
     TYPE: RearrangeCompositeTask-v0
@@ -155,6 +155,8 @@ TASK:
         STAGE_COMPLETE_REWARD: 10.0
         SUCCESS_REWARD: 10.0
     ########################
+    NUM_STEPS:
+        TYPE: "NumStepsMeasure"
 
     MEASUREMENTS:
         # General measure
@@ -178,6 +180,7 @@ TASK:
         - "COMPOSITE_NODE_IDX"
         - "COMPOSITE_SUCCESS"
         - "COMPOSITE_REWARD"
+        - "NUM_STEPS"
     ACTIONS:
         ARM_ACTION:
             TYPE: "ArmAction"
@@ -209,13 +212,15 @@ SIMULATOR:
     HOLD_THRESH: 0.09
     AC_FREQ_RATIO: 4
     DEBUG_RENDER: False
+    DEBUG_RENDER_GOAL: True
     AGENTS: ['AGENT_0']
     CONCUR_RENDER: True
     AUTO_SLEEP: True
+    FORCE_RECOMPUTE_NAVMESH: False
     AGENT_0:
         HEIGHT: 1.5
         IS_SET_START_STATE: False
-        RADIUS: 0.1
+        RADIUS: 0.3
         SENSORS: ['HEAD_RGB_SENSOR', 'HEAD_DEPTH_SENSOR', 'ARM_RGB_SENSOR', 'ARM_DEPTH_SENSOR']
         START_POSITION: [0, 0, 0]
         START_ROTATION: [0, 0, 0, 1]

@@ -17,6 +17,7 @@ from habitat.tasks.utils import get_angle
 
 @registry.register_task(name="RearrangePickTask-v0")
 class RearrangePickTaskV1(RearrangeTask):
+    DISTANCE_TO_RECEPTACLE = 1.0
     """
     Rearrange Pick Task with Fetch robot interacting with objects and environment.
     """
@@ -45,7 +46,7 @@ class RearrangePickTaskV1(RearrangeTask):
     def _get_targ_pos(self, sim):
         return sim.get_target_objs_start()
 
-    def _gen_start_pos(self, sim, is_easy_init):
+    def _gen_start_pos(self, sim, is_easy_init, force_snap_pos=None):
         target_positions = self._get_targ_pos(sim)
         if self.force_set_idx is not None:
             sel_idx = self.force_set_idx
@@ -53,7 +54,12 @@ class RearrangePickTaskV1(RearrangeTask):
             sel_idx = np.random.randint(0, len(target_positions))
         targ_pos = target_positions[sel_idx]
 
-        orig_start_pos = sim.safe_snap_point(targ_pos)
+        if force_snap_pos is not None:
+            snap_pos = force_snap_pos
+        else:
+            snap_pos = targ_pos
+
+        orig_start_pos = sim.safe_snap_point(snap_pos)
 
         state = sim.capture_state()
         start_pos = orig_start_pos
@@ -71,7 +77,6 @@ class RearrangePickTaskV1(RearrangeTask):
             start_pos = orig_start_pos + np.random.normal(
                 0, self._config.BASE_NOISE, size=(3,)
             )
-
             rel_targ = targ_pos - start_pos
             angle_to_obj = get_angle(forward[[0, 2]], rel_targ[[0, 2]])
             if np.cross(forward[[0, 2]], rel_targ[[0, 2]]) > 0:
@@ -125,7 +130,7 @@ class RearrangePickTaskV1(RearrangeTask):
         return (
             self._sim.grasp_mgr.is_grasped
             and action_args.get("grip_action", None) is not None
-            and action_args["grip_action"] <= 0
+            and action_args["grip_action"] < 0
         )
 
     def step(self, action, episode):
@@ -152,8 +157,33 @@ class RearrangePickTaskV1(RearrangeTask):
         ):
             start_pos, start_rot, sel_idx = self.start_states[episode_id]
         else:
+            mgr = sim.get_articulated_object_manager()
+            start_pos = None
+            if len(episode.targets.keys()) == 1:
+                target_key = list(episode.targets.keys())[0]
+
+                receptacle_ao = None
+                if target_key in episode.target_receptacles and (
+                    # Not a typo, "fridge" is sometimes "frige" in
+                    # ReplicaCAD.
+                    "frige" in episode.target_receptacles[target_key]
+                    or "fridge" in episode.target_receptacles[target_key]
+                ):
+                    receptacle_ao = mgr.get_object_by_handle(
+                        episode.target_receptacles[target_key]
+                    )
+                if receptacle_ao is not None:
+                    # There is only one target inside an articulated object receptacle
+                    # The start position is in front of the receptcacle
+                    start_pos = (
+                        receptacle_ao.translation
+                        + receptacle_ao.rotation.transform_vector(
+                            np.array([self.DISTANCE_TO_RECEPTACLE, 0, 0])
+                        )
+                    )
+                    start_pos = np.array(start_pos)
             start_pos, start_rot, sel_idx = self._gen_start_pos(
-                sim, self._config.EASY_INIT
+                sim, self._config.EASY_INIT, start_pos
             )
             self.start_states[episode_id] = (start_pos, start_rot, sel_idx)
             self.cache.save(self.start_states)
@@ -163,4 +193,4 @@ class RearrangePickTaskV1(RearrangeTask):
 
         self._targ_idx = sel_idx
 
-        return super(RearrangePickTaskV1, self).reset(episode)
+        return self._get_observations(episode)

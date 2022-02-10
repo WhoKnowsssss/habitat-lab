@@ -3,7 +3,7 @@ ENVIRONMENT:
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/rearrange_pick/replica_cad/v0/rearrange_pick_replica_cad_v0/pick.json.gz
+    DATA_PATH: data/datasets/replica_cad/v0/{split}/no_container_50k_1k.json.gz
     SCENES_DIR: "data/replica_cad/"
 TASK:
     TYPE: RearrangeNavToObjTask-v0
@@ -45,18 +45,18 @@ TASK:
     OBJECT_TO_GOAL_DISTANCE:
         TYPE: "ObjectToGoalDistance"
     ROT_DIST_TO_GOAL:
-      TYPE: "RotDistToGoal"
+        TYPE: "RotDistToGoal"
     DIST_TO_GOAL:
-      TYPE: "DistToGoal"
+        TYPE: "DistToGoal"
     BAD_CALLED_TERMINATE:
-      TYPE: "BadCalledTerminate"
-      BAD_TERM_PEN: 0.0
-      DECAY_BAD_TERM: False
+        TYPE: "BadCalledTerminate"
+        BAD_TERM_PEN: 0.0
+        DECAY_BAD_TERM: False
     NAV_TO_POS_SUCC:
-      TYPE: "NavToPosSucc"
-      SUCCESS_DISTANCE: 0.2
+        TYPE: "NavToPosSucc"
+        SUCCESS_DISTANCE: 0.2
     NUM_STEPS:
-      TYPE: "NumStepsMeasure"
+        TYPE: "NumStepsMeasure"
     REARRANGE_NAV_TO_OBJ_REWARD:
         TYPE: "NavToObjReward"
         # Negative means a penalty
@@ -102,13 +102,15 @@ TASK:
 SIMULATOR:
     ACTION_SPACE_CONFIG: v0
     DEBUG_RENDER: False
+    DEBUG_RENDER_GOAL: True
     CONCUR_RENDER: True
     AUTO_SLEEP: True
     AGENTS: ['AGENT_0']
+    FORCE_RECOMPUTE_NAVMESH: False
     AGENT_0:
         HEIGHT: 1.5
         IS_SET_START_STATE: False
-        RADIUS: 0.1
+        RADIUS: 0.3
         SENSORS: ['HEAD_DEPTH_SENSOR']
         START_POSITION: [0, 0, 0]
         START_ROTATION: [0, 0, 0, 1]

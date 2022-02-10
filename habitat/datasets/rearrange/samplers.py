@@ -85,7 +85,6 @@ class ObjectSampler:
         self.receptacle_candidates: Optional[
             List[Receptacle]
         ] = None  # the specific receptacle instances relevant to this sampler
-        assert len(self.object_set) > 0
         assert len(self.receptacle_sets) > 0
         self.max_sample_attempts = 1000  # number of distinct object|receptacle pairings to try before giving up
         self.max_placement_attempts = 50  # number of times to attempt a single object|receptacle placement pairing
@@ -310,7 +309,7 @@ class ObjectSampler:
             sim, object_handle, target_receptacle, snap_down, vdb
         )
 
-        return new_object
+        return new_object, target_receptacle
 
     def sample(
         self,
@@ -339,9 +338,9 @@ class ObjectSampler:
             and num_pairing_tries < self.max_sample_attempts
         ):
             num_pairing_tries += 1
-            new_object = self.single_sample(sim, snap_down, vdb)
+            new_object, receptacle = self.single_sample(sim, snap_down, vdb)
             if new_object is not None:
-                new_objects.append(new_object)
+                new_objects.append((new_object, receptacle))
 
         if len(new_objects) >= self.num_objects[0]:
             return new_objects
@@ -391,7 +390,9 @@ class ObjectTargetSampler(ObjectSampler):
         sim: habitat_sim.Simulator,
         snap_down: bool = False,
         vdb: Optional[DebugVisualizer] = None,
-    ) -> Optional[Dict[str, habitat_sim.physics.ManagedRigidObject]]:
+    ) -> Optional[
+        Dict[str, Tuple[habitat_sim.physics.ManagedRigidObject, Receptacle]]
+    ]:
         """
         Overridden sampler maps to instances without replacement.
         Returns None if failed, or a dict mapping object handles to new object instances in the sampled target location.
@@ -417,7 +418,7 @@ class ObjectTargetSampler(ObjectSampler):
             and num_pairing_tries < self.max_sample_attempts
         ):
             num_pairing_tries += 1
-            new_object = self.single_sample(sim, snap_down, vdb)
+            new_object, receptacle = self.single_sample(sim, snap_down, vdb)
             if new_object is not None:
                 targets_found += 1
                 found_match = False
@@ -427,7 +428,10 @@ class ObjectTargetSampler(ObjectSampler):
                         == new_object.creation_attributes.handle
                         and object_instance.handle not in new_target_objects
                     ):
-                        new_target_objects[object_instance.handle] = new_object
+                        new_target_objects[object_instance.handle] = (
+                            new_object,
+                            receptacle,
+                        )
                         found_match = True
                         # remove this object instance match from future pairings
                         self.object_set.remove(
