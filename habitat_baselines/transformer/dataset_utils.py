@@ -7,14 +7,6 @@ from collections import deque
 import numpy as np
 import torch
 
-from torch.utils.data import (
-    Dataset, 
-    IterableDataset, 
-    RandomSampler,
-    SequentialSampler,
-    DistributedSampler,
-    get_worker_info
-)
 
 from habitat import Config, logger 
         
@@ -137,5 +129,9 @@ def producer(
     deque: deque,
     verbose: bool,
 ):
-    if len(deque) < 3:
-        deque.append(read_dataset(config, verbose, rng))
+    while True:
+        if len(deque) < 2:
+            deque.append(read_dataset(config, verbose, rng))
+            time.sleep(5)
+        else:
+            time.sleep(10)

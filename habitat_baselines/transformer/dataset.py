@@ -102,9 +102,7 @@ class RollingDataset(IterableDataset):
             self.dataset_context['num_init'] = 0
             self.num_iterated_epoch = 0
             self.queue = deque()
-            rng = np.random.default_rng(self.seed + self.seed_epoch)
-            self.producer = Thread(target=producer, args=(config, rng, self.queue, ((self.id == 0) and self.world_rank)))
-            self.producer.start()
+            self.producer = None
             
             
         def init_dataset(self):
@@ -113,12 +111,12 @@ class RollingDataset(IterableDataset):
             
             while len(self.queue) == 0:
                 time.sleep(1)
-            self.dataset = StateActionReturnDataset.from_config(self.config, self.queue.popleft(), self.context_length)
+            self.dataset = StateActionReturnDataset.from_config(self.queue.popleft(), self.context_length)
                   
             self.dataset_context['num_init'] += 1
 
             if self._is_distributed:
-                self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=self.seed, drop_last=True)
+                self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=(self.seed + self.seed_epoch), drop_last=True)
             else:
                 self.sampler = SequentialSampler(self.dataset) # RandomSampler
 
@@ -127,8 +125,10 @@ class RollingDataset(IterableDataset):
             self.num_workers = worker_info.num_workers - 1 if worker_info is not None else 0
             self.id = worker_info.id if worker_info is not None else 0
 
-            if worker_info is not None: 
-                self.id = worker_info.id
+            rng = np.random.default_rng(self.seed)
+            if self.producer is None:
+                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False))
+                self.producer.start()
 
             if self.dataset_context['num_init'] != -1:
                 self.init_dataset()
@@ -141,7 +141,6 @@ class RollingDataset(IterableDataset):
                 next(its.islice(self.sampler_iterator, worker_info.id, worker_info.id), None)
             else:
                 self.dataset_context['num_init'] = -1
-
             return self
 
         def __next__(self):
