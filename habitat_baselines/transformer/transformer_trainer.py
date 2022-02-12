@@ -280,6 +280,7 @@ class TransformerTrainer(BaseRLTrainer):
         self.train_loader = DataLoader(self.train_dataset, pin_memory=True,
                                 batch_size=self.config.RL.TRANSFORMER.batch_size,
                                 num_workers=self.config.RL.TRANSFORMER.num_workers, 
+                                persistent_workers=True
                             )
 
         self.optimizer = torch.optim.Adam(
@@ -778,7 +779,15 @@ class TransformerTrainer(BaseRLTrainer):
 
         self._setup_transformer_policy()
 
-        self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
+        # self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
+        prefix = "module."
+        self.transformer_policy.load_state_dict(
+            {
+                k[k.find(prefix) + len(prefix) :]: v
+                for k, v in ckpt_dict["state_dict"].items()
+                if prefix in k
+            }
+        )
 
         observations = self.envs.reset()
         batch = batch_obs(
