@@ -160,9 +160,10 @@ class TransformerTrainer(BaseRLTrainer):
             )
 
         if self.config.RL.TRANSFORMER.pretrained:
+            prefix = "module."
             self.transformer_policy.load_state_dict(
                 {
-                    k[len("transformer_policy.") :]: v
+                    k[k.find(prefix) + len(prefix) :]: v
                     for k, v in pretrained_state["state_dict"].items()
                 }
             )
@@ -215,8 +216,8 @@ class TransformerTrainer(BaseRLTrainer):
             world_size = torch.distributed.get_world_size()
             if rank0_only():
                 logger.info(
-                    "Initialized Skill Transformer with {} workers".format(
-                        world_size
+                    "Initialized Skill Transformer with {} workers, id={}".format(
+                        world_size, world_rank
                     )
                 )
 
@@ -224,9 +225,9 @@ class TransformerTrainer(BaseRLTrainer):
             self.config.TORCH_GPU_ID = local_rank
             self.config.SIMULATOR_GPU_ID = local_rank
             # Multiply by the number of simulators to make sure they also get unique seeds
-            self.config.TASK_CONFIG.SEED += (
-                world_rank * self.config.NUM_ENVIRONMENTS
-            )
+            # self.config.TASK_CONFIG.SEED += (
+            #     world_rank * self.config.NUM_ENVIRONMENTS
+            # )
             self.config.freeze()
 
             random.seed(self.config.TASK_CONFIG.SEED)
@@ -275,7 +276,12 @@ class TransformerTrainer(BaseRLTrainer):
         # self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
         manager = mp.Manager()
         self.dataset_context = manager.dict()
-        self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3, (world_size, world_rank, self.config.TASK_CONFIG.SEED), self.dataset_context)
+        self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, 
+                                self.config.RL.TRANSFORMER.context_length*3, 
+                                (world_size, world_rank, self.config.TASK_CONFIG.SEED), 
+                                self.dataset_context,
+                                rank0_only()
+                            )
             
         self.train_loader = DataLoader(self.train_dataset, pin_memory=True,
                                 batch_size=self.config.RL.TRANSFORMER.batch_size,
@@ -501,68 +507,68 @@ class TransformerTrainer(BaseRLTrainer):
     def _training_log(
         self, writer, losses: Dict[str, float], prev_time: int = 0
     ):
-        deltas = {
-            k: (
-                (v[-1] - v[0]).sum().item()
-                if len(v) > 1
-                else v[0].sum().item()
-            )
-            for k, v in self.window_episode_stats.items()
-        }
-        deltas["count"] = max(deltas["count"], 1.0)
+        # deltas = {
+        #     k: (
+        #         (v[-1] - v[0]).sum().item()
+        #         if len(v) > 1
+        #         else v[0].sum().item()
+        #     )
+        #     for k, v in self.window_episode_stats.items()
+        # }
+        # deltas["count"] = max(deltas["count"], 1.0)
 
-        writer.add_scalar(
-            "reward",
-            deltas["reward"] / deltas["count"],
-            self.num_steps_done,
-        )
+        # writer.add_scalar(
+        #     "reward",
+        #     deltas["reward"] / deltas["count"],
+        #     self.num_updates_done,
+        # )
 
-        # Check to see if there are any metrics
-        # that haven't been logged yet
-        metrics = {
-            k: v / deltas["count"]
-            for k, v in deltas.items()
-            if k not in {"reward", "count"}
-        }
-        if len(metrics) > 0:
-            writer.add_scalars("metrics", metrics, self.num_steps_done)
+        # # Check to see if there are any metrics
+        # # that haven't been logged yet
+        # metrics = {
+        #     k: v / deltas["count"]
+        #     for k, v in deltas.items()
+        #     if k not in {"reward", "count"}
+        # }
+        # if len(metrics) > 0:
+        #     writer.add_scalars("metrics", metrics, self.num_updates_done)
 
         writer.add_scalars(
             "losses",
             losses,
-            self.num_steps_done,
+            self.num_updates_done,
         )
 
         # log stats
-        if self.num_updates_done % self.config.LOG_INTERVAL == 0:
-            logger.info(
-                "update: {}\tfps: {:.3f}\t".format(
-                    self.num_updates_done,
-                    self.num_steps_done
-                    / ((time.time() - self.t_start) + prev_time),
-                )
-            )
+        # if self.num_updates_done % self.config.LOG_INTERVAL == 0:
+        #     logger.info(
+        #         "update: {}\tfps: {:.3f}\t".format(
+        #             self.num_updates_done,
+        #             self.num_updates_done
+        #             / ((time.time() - self.t_start) + prev_time),
+        #         )
+        #     )
 
-            logger.info(
-                "update: {}\tenv-time: {:.3f}s\tpth-time: {:.3f}s\t"
-                "frames: {}".format(
-                    self.num_updates_done,
-                    self.env_time,
-                    self.pth_time,
-                    self.num_steps_done,
-                )
-            )
+        #     logger.info(
+        #         "update: {}\tenv-time: {:.3f}s\tpth-time: {:.3f}s\t"
+        #         "frames: {}".format(
+        #             self.num_updates_done,
+        #             self.env_time,
+        #             self.pth_time,
+        #             self.num_updates_done,
+        #         )
+        #     )
 
-            logger.info(
-                "Average window size: {}  {}".format(
-                    len(self.window_episode_stats["count"]),
-                    "  ".join(
-                        "{}: {:.3f}".format(k, v / deltas["count"])
-                        for k, v in deltas.items()
-                        if k != "count"
-                    ),
-                )
-            )
+        #     logger.info(
+        #         "Average window size: {}  {}".format(
+        #             len(self.window_episode_stats["count"]),
+        #             "  ".join(
+        #                 "{}: {:.3f}".format(k, v / deltas["count"])
+        #                 for k, v in deltas.items()
+        #                 if k != "count"
+        #             ),
+        #         )
+        #     )
 
     def _run_epoch(
         self, 
@@ -589,7 +595,7 @@ class TransformerTrainer(BaseRLTrainer):
                 # logits, loss = model(x, y, r)
                 loss = self.transformer_policy(x, y, y, r, t)
                 loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
-                losses.append(loss.item())
+                losses.append(loss)
 
             if is_train:
 
@@ -600,14 +606,11 @@ class TransformerTrainer(BaseRLTrainer):
                 self.optimizer.step()
 
                 # report progress
-                pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
+                if rank0_only():
+                    pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
 
-        loss_log = {}
-        if is_train:
-            loss_log["train"] = float(np.mean(losses))
-        else:
-            loss_log["test"] = float(np.mean(losses))
-        return loss_log
+        losses = torch.mean(torch.stack(losses))
+        return losses
 
     @profiling_wrapper.RangeContext("train")
     def train(self) -> None:
@@ -652,7 +655,7 @@ class TransformerTrainer(BaseRLTrainer):
         with (
             get_writer(self.config, flush_secs=self.flush_secs)
             if rank0_only()
-            else contextlib.suppress()
+            else contextlib.suppress(AttributeError)
         ) as writer:
             while not self.is_done():
                 profiling_wrapper.on_start_step()
@@ -673,8 +676,8 @@ class TransformerTrainer(BaseRLTrainer):
 
                     save_resume_state(
                         dict(
-                            state_dict=self.agent.state_dict(),
-                            optim_state=self.agent.optimizer.state_dict(),
+                            state_dict=self.transformer_policy.state_dict(),
+                            optim_state=self.optimizer.state_dict(),
                             lr_sched_state=lr_scheduler.state_dict(),
                             config=self.config,
                             # requeue_stats=requeue_stats,
@@ -699,10 +702,10 @@ class TransformerTrainer(BaseRLTrainer):
 
                 self.num_updates_done += 1
 
-                # self._training_log(writer, loss, prev_time)
+                self._training_log(writer, {'loss': loss}, prev_time)
 
                 # checkpoint model
-                if rank0_only(): #  and self.should_checkpoint()
+                if rank0_only() and self.should_checkpoint():
                     self.save_checkpoint(
                         f"ckpt.{count_checkpoints}.pth",
                         dict(
