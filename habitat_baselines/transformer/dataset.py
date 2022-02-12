@@ -80,14 +80,16 @@ class RollingDataset(IterableDataset):
             config: Config, 
             context_length: int, 
             sampler_params: Tuple, 
-            dataset_context: Dict
+            dataset_context: Dict,
+            world_rank: bool,
         ):
             self.config = config
             self.context_length = context_length
             self.dataset_context = dataset_context
             self.steps_to_reload = config.steps_to_reload
+            self.world_rank = world_rank
             num_replicas, rank, self.seed = sampler_params
-            assert (num_replicas is None == rank is None), "Local or Distributed Training? "
+            assert ((num_replicas is None) == (rank is None)), "Local or Distributed Training? "
             if num_replicas is None:
                 self._is_distributed = False
             else:
@@ -101,15 +103,17 @@ class RollingDataset(IterableDataset):
             self.num_iterated_epoch = 0
             self.queue = deque()
             rng = np.random.default_rng(self.seed + self.seed_epoch)
-            self.producer = Thread(target=producer, args=(config, rng, self.queue, (self.id == 0)))
+            self.producer = Thread(target=producer, args=(config, rng, self.queue, ((self.id == 0) and self.world_rank)))
+            self.producer.start()
             
             
         def init_dataset(self):
 
             assert hasattr(self, 'seed_epoch'), "Set epoch before Dataloader loads"
             
-
-            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length, rng, )
+            while len(self.queue) == 0:
+                time.sleep(1)
+            self.dataset = StateActionReturnDataset.from_config(self.config, self.queue.popleft(), self.context_length)
                   
             self.dataset_context['num_init'] += 1
 
@@ -161,12 +165,15 @@ class RollingDataset(IterableDataset):
 
         def set_epoch(self, epoch):
             if self._is_distributed:
-                self.sampler.set_epoch(epoch)
+                try:
+                    self.sampler.set_epoch(epoch)
+                except:
+                    pass
             self.seed_epoch = epoch
 
         
-    def __init__(self, config: Config, context_length: int, sampler_params: Tuple, dataset_context: dict):
-        self.iterator = self.DatasetIterator(config, context_length, sampler_params, dataset_context)
+    def __init__(self, config: Config, context_length: int, sampler_params: Tuple, dataset_context: dict, world_rank: bool):
+        self.iterator = self.DatasetIterator(config, context_length, sampler_params, dataset_context, world_rank)
 
     def __iter__(self):
         return iter(self.iterator)
