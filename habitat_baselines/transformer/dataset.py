@@ -100,15 +100,16 @@ class RollingDataset(IterableDataset):
             self.dataset_context['num_init'] = 0
             self.num_iterated_epoch = 0
             self.queue = deque()
-            self.producer = Thread(target=producer, args=(queue, lock, n)))
             rng = np.random.default_rng(self.seed + self.seed_epoch)
+            self.producer = Thread(target=producer, args=(config, rng, self.queue, (self.id == 0)))
+            
             
         def init_dataset(self):
 
             assert hasattr(self, 'seed_epoch'), "Set epoch before Dataloader loads"
             
 
-            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length, rng, (self.id == 0))
+            self.dataset = StateActionReturnDataset.from_config(self.config, self.context_length, rng, )
                   
             self.dataset_context['num_init'] += 1
 
