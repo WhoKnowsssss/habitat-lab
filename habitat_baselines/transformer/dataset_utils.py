@@ -24,8 +24,6 @@ def read_dataset(
     path = config.trajectory_dir
 
     filenames = os.listdir(path)
-    
-    filenames.remove("model.pth")
 
     if verbose:
         logger.info(
@@ -59,6 +57,7 @@ def read_dataset(
                 obss += [states]
                 actions += [ac] if ac.shape[0] > 1 else [ac[0]]
                 stepwise_returns += [ret[0]]
+                buffer_index += 1
                 if terminal[0] == 1:
                     done_idxs += [len(obss)]
                     curr_num_transitions = done_idxs[-1]
@@ -70,7 +69,6 @@ def read_dataset(
                         buffer_index = rng.integers(0, len(dataset_raw["actions"]))
                 returns[-1] += ret[0]
                 i += 1
-                buffer_index += 1
                 
                 if i >= 110000:
                     obss = obss[:curr_num_transitions]
@@ -95,6 +93,7 @@ def read_dataset(
 
     # -- create reward-to-go dataset
     start_index = 0
+    rlist = []
     rtg = np.zeros_like(stepwise_returns)
     for i in done_idxs:
         i = int(i)
@@ -102,7 +101,17 @@ def read_dataset(
         for j in range(i-1, start_index-1, -1): # start from i-1
             rtg_j = curr_traj_returns[j-start_index:i-start_index]
             rtg[j] = sum(rtg_j)
+        
+        rlist.append(sum(curr_traj_returns))
         start_index = i
+
+    # logger.info(
+    #     "Success rate: {}.".format(
+
+    #         sum((np.array(rlist) > 100)) / len(rlist)
+    #     )
+    # )
+        
     # print('max rtg is %d' % max(rtg))
 
     # -- create timestep dataset
@@ -132,6 +141,6 @@ def producer(
     while True:
         if len(deque) < 2:
             deque.append(read_dataset(config, verbose, rng))
-            time.sleep(5)
+            time.sleep(2)
         else:
             time.sleep(10)

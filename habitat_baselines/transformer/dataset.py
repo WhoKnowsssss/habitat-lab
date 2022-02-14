@@ -111,6 +111,7 @@ class RollingDataset(IterableDataset):
             
             while len(self.queue) == 0:
                 time.sleep(1)
+            # print(f"{self.rank}: YESSSSS\n")
             self.dataset = StateActionReturnDataset.from_config(self.queue.popleft(), self.context_length)
                   
             self.dataset_context['num_init'] += 1
@@ -121,6 +122,8 @@ class RollingDataset(IterableDataset):
                 self.sampler = SequentialSampler(self.dataset) # RandomSampler
 
         def __iter__(self):
+            self.num_iterated_epoch = 0
+
             worker_info = get_worker_info()
             self.num_workers = worker_info.num_workers - 1 if worker_info is not None else 0
             self.id = worker_info.id if worker_info is not None else 0
@@ -129,18 +132,23 @@ class RollingDataset(IterableDataset):
             if self.producer is None:
                 self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False))
                 self.producer.start()
+            # print(self.producer.is_alive() )
 
-            if self.dataset_context['num_init'] != -1:
+            if 'need_init_{}'.format(self.id) not in self.dataset_context:
+                self.dataset_context['need_init_{}'.format(self.id)] = True
+
+            # print(f"rank: {self.rank}, {self.dataset_context['need_init_{}'.format(self.id)]}, {len(self.queue)}")
+
+            if self.dataset_context['need_init_{}'.format(self.id)]:
                 self.init_dataset()
+                self.dataset_context['need_init_{}'.format(self.id)] = False
 
             self.sampler_iterator = iter(self.sampler)
 
-            if worker_info is not None: 
-                if self.dataset_context['num_init'] == worker_info.num_workers:
-                    self.dataset_context['num_init'] = -1
-                next(its.islice(self.sampler_iterator, worker_info.id, worker_info.id), None)
-            else:
-                self.dataset_context['num_init'] = -1
+            next(its.islice(self.sampler_iterator, self.id, self.id), None)
+            
+
+            # print(f"{self.rank}: BACKKK\n")
             return self
 
         def __next__(self):
@@ -154,7 +162,9 @@ class RollingDataset(IterableDataset):
                 self.dataset_context['num_iterated'] += self.num_iterated_epoch
                 if self.dataset_context['num_iterated'] >= self.steps_to_reload:
                     self.dataset_context['num_iterated'] = 0
-                    self.dataset_context['num_init'] = 0
+                    for i in range(self.num_workers):
+                        self.dataset_context['need_init_{}'.format(i)] = True
+                    
                 
                 raise StopIteration
 

@@ -124,9 +124,11 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.head_value = nn.Linear(config.n_embd, 1, bias=False)
 
         self.block_size = config.block_size
         self.apply(self._init_weights)
+        self.head_value.weight.data.normal_(mean=0.0, std=1.0)
 
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
@@ -254,10 +256,11 @@ class GPT(nn.Module):
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
         x = self.ln_f(x)
-        logits = self.head(x)
+        
 
         if actions is not None and self.model_type == 'reward_conditioned':
-            logits = logits[:, 1::3, :] # only keep predictions from state_embeddings
+            logits = self.head(x[:, 1::3, :]) # only keep predictions from state_embeddings
+            logits_rwd = self.head_value(x[:, 1::3, :])
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -271,5 +274,6 @@ class GPT(nn.Module):
         loss = None
         if targets is not None:
             loss = F.mse_loss(logits, targets)
+            loss += 0.01 * F.mse_loss(logits_rwd, rtgs)
 
         return logits, loss

@@ -18,6 +18,7 @@ from tqdm import tqdm
 from gym import spaces
 from torch import device, nn
 from torch.optim.lr_scheduler import LambdaLR
+from warmup_scheduler import GradualWarmupScheduler
 from torch.utils.data import (
     DataLoader,
     DistributedSampler
@@ -611,6 +612,7 @@ class TransformerTrainer(BaseRLTrainer):
                     pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
 
         losses = torch.mean(torch.stack(losses))
+        print("LR:::", self.optimizer.param_groups[0]['lr'])
         return losses
 
     @profiling_wrapper.RangeContext("train")
@@ -625,17 +627,24 @@ class TransformerTrainer(BaseRLTrainer):
 
         count_checkpoints = 0
         prev_time = 0
-
-        lr_scheduler = LambdaLR(
+        
+        lr_scheduler_after = LambdaLR(
             optimizer=self.optimizer,
             lr_lambda=lambda x: 1 - self.percent_done(),
+        )
+        lr_scheduler = GradualWarmupScheduler(
+            self.optimizer, 
+            multiplier=1, 
+            total_epoch=100, 
+            after_scheduler=lr_scheduler_after
         )
 
         resume_state = load_resume_state(self.config)
         if resume_state is not None:
             self.transformer_policy.load_state_dict(resume_state["state_dict"])
             self.optimizer.load_state_dict(resume_state["optim_state"])
-            lr_scheduler.load_state_dict(resume_state["lr_sched_state"])
+            lr_scheduler_after.load_state_dict(resume_state["lr_sched_state"])
+            lr_scheduler.total_epoch = 0
 
             # requeue_stats = resume_state["requeue_stats"]
             # self.env_time = requeue_stats["env_time"]
@@ -662,6 +671,10 @@ class TransformerTrainer(BaseRLTrainer):
                 profiling_wrapper.on_start_step()
                 profiling_wrapper.range_push("train update")
 
+                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
+                    self.optimizer.step()
+                    lr_scheduler.step()  # type: ignore
+
                 if rank0_only() and self._should_save_resume_state():
                     # requeue_stats = dict(
                     #     env_time=self.env_time,
@@ -674,12 +687,11 @@ class TransformerTrainer(BaseRLTrainer):
                     #     running_episode_stats=self.running_episode_stats,
                     #     window_episode_stats=dict(self.window_episode_stats),
                     # )
-
                     save_resume_state(
                         dict(
                             state_dict=self.transformer_policy.state_dict(),
                             optim_state=self.optimizer.state_dict(),
-                            lr_sched_state=lr_scheduler.state_dict(),
+                            lr_sched_state=lr_scheduler_after.state_dict(),
                             config=self.config,
                             # requeue_stats=requeue_stats,
                         ),
@@ -698,8 +710,7 @@ class TransformerTrainer(BaseRLTrainer):
 
                 loss = self._all_reduce(loss)
 
-                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
-                    lr_scheduler.step()  # type: ignore
+
 
                 self.num_updates_done += 1
 
