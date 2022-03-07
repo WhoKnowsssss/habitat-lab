@@ -6,6 +6,7 @@
 
 import os
 import os.path as osp
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import magnum as mn
@@ -214,10 +215,11 @@ class RearrangeEpisodeGenerator:
                 )
                 raise (NotImplementedError)
 
-    def _get_object_target_samplers(self) -> None:
+    def _get_object_target_samplers(self, target_numbers) -> None:
         """
         Initialize target samplers. Expects self.episode_data to be populated by object samples.
         """
+
         self._target_samplers: Dict[str, samplers.ObjectTargetSampler] = {}
         for target_sampler_info in self.cfg.object_target_samplers:
             assert "name" in target_sampler_info
@@ -243,6 +245,7 @@ class RearrangeEpisodeGenerator:
                 ] = samplers.ObjectTargetSampler(
                     object_instances,
                     receptacle_info,
+                    target_numbers[target_sampler_info["name"]],
                     (
                         target_sampler_info["params"]["num_samples"][0],
                         target_sampler_info["params"]["num_samples"][1],
@@ -409,6 +412,23 @@ class RearrangeEpisodeGenerator:
 
         return generated_episodes
 
+    def _get_target_numbers(self):
+        target_numbers = {}
+        for target_sampler_info in self.cfg.object_target_samplers:
+            num_objects = (
+                target_sampler_info["params"]["num_samples"][0],
+                target_sampler_info["params"]["num_samples"][1],
+            )
+            target_number = (
+                random.randrange(num_objects[0], num_objects[1])
+                if num_objects[1] > num_objects[0]
+                else num_objects[0]
+            )
+            sampler_name = target_sampler_info["name"]
+            target_numbers[sampler_name] = target_number
+
+        return target_numbers
+
     def generate_single_episode(self) -> Optional[RearrangeEpisode]:
         """
         Generate a single episode, sampling the scene.
@@ -418,16 +438,31 @@ class RearrangeEpisodeGenerator:
         self.episode_data: Dict[str, Dict[str, Any]] = {
             "sampled_objects": {},  # object sampler name -> sampled object instances
             "sampled_targets": {},  # target sampler name -> (object, target state)
-            "sampled_receptacles": {},  # target_handle -> receptacle
         }
 
         ep_scene_handle = self.generate_scene()
+
+        # Get the unique open receptacle
+        sampler = list(self._obj_samplers.values())[0]
+
+        target_numbers = self._get_target_numbers()
+        target_receptacles = {}
+        all_target_receptacles = []
+        # for sampler_name, sampler in self._target_samplers.items():
+        for sampler_name, num_targets in target_numbers.items():
+            new_target_receptacles = [
+                sampler.sample_receptacle(self.sim) for _ in range(num_targets)
+            ]
+            target_receptacles[sampler_name] = new_target_receptacles
+            all_target_receptacles.extend(new_target_receptacles)
 
         # sample AO states for objects in the scene
         # ao_instance_handle -> [ (link_ix, state), ... ]
         ao_states: Dict[str, Dict[int, float]] = {}
         for sampler_name, ao_state_sampler in self._ao_state_samplers.items():
-            sampler_states = ao_state_sampler.sample(self.sim)
+            sampler_states = ao_state_sampler.sample(
+                self.sim, all_target_receptacles
+            )
             assert (
                 sampler_states is not None
             ), f"AO sampler '{sampler_name}' failed"
@@ -443,12 +478,17 @@ class RearrangeEpisodeGenerator:
             self.vdb.make_debug_video(prefix="receptacles_")
 
         # sample object placements
+        object_to_containing_receptacle = {}
         for sampler_name, obj_sampler in self._obj_samplers.items():
-            new_objects = obj_sampler.sample(
+            object_sample_data = obj_sampler.sample(
                 self.sim,
+                all_target_receptacles,
                 snap_down=True,
                 vdb=(self.vdb if self._render_debug_obs else None),
             )
+            new_objects, receptacles = zip(*object_sample_data)
+            for obj, rec in zip(new_objects, receptacles):
+                object_to_containing_receptacle[obj.handle] = rec
             if sampler_name not in self.episode_data["sampled_objects"]:
                 self.episode_data["sampled_objects"][
                     sampler_name
@@ -476,18 +516,28 @@ class RearrangeEpisodeGenerator:
             return None
 
         # generate the target samplers
-        self._get_object_target_samplers()
+        self._get_object_target_samplers(target_numbers)
 
         target_refs: Dict[str, str] = {}
 
         # sample targets
         for sampler_name, target_sampler in self._target_samplers.items():
             new_target_objects = target_sampler.sample(
-                self.sim, snap_down=True, vdb=self.vdb
+                self.sim,
+                snap_down=True,
+                vdb=self.vdb,
+                target_receptacles=target_receptacles[sampler_name],
+                object_to_containing_receptacle=object_to_containing_receptacle,
             )
+            if new_target_objects is None:
+                raise ValueError("Cannot sample target objects")
+
             # cache transforms and add visualizations
-            for instance_handle, value in new_target_objects.items():
+            for i, (instance_handle, value) in enumerate(
+                new_target_objects.items()
+            ):
                 target_object, target_receptacle = value
+                target_receptacles[sampler_name][i] = target_receptacle
                 assert (
                     instance_handle not in self.episode_data["sampled_targets"]
                 ), f"Duplicate target for instance '{instance_handle}'."
@@ -499,9 +549,6 @@ class RearrangeEpisodeGenerator:
                 self.episode_data["sampled_targets"][
                     instance_handle
                 ] = np.array(target_transform)
-                self.episode_data["sampled_receptacles"][
-                    instance_handle
-                ] = target_receptacle.parent_object_handle
                 target_refs[
                     instance_handle
                 ] = f"{sampler_name}|{len(target_refs)}"
@@ -538,6 +585,7 @@ class RearrangeEpisodeGenerator:
             )
 
         self.num_ep_generated += 1
+
         return RearrangeEpisode(
             scene_dataset_config=self.cfg.dataset_path,
             additional_obj_config_paths=self.cfg.additional_object_paths,
@@ -553,7 +601,15 @@ class RearrangeEpisodeGenerator:
             ao_states=ao_states,
             rigid_objs=sampled_rigid_object_states,
             targets=self.episode_data["sampled_targets"],
-            target_receptacles=self.episode_data["sampled_receptacles"],
+            # Hack. The pick task needs to know if the object is starting in a
+            # receptacle. This code assumes that the dataset for the pick task
+            # always contains the desired object in the 0th index.
+            target_receptacles=(
+                all_target_receptacles[0].parent_object_handle,
+                all_target_receptacles[0].parent_link,
+            )
+            if len(all_target_receptacles) != 0
+            else ("", 0),
             markers=self.cfg.markers,
             info={"object_labels": target_refs},
         )
@@ -932,6 +988,7 @@ if __name__ == "__main__":
             # NOTE: you can retrieve a string CSV rep of the full SceneDataset with ep_gen.sim.metadata_mediator.dataset_report()
             mm = ep_gen.sim.metadata_mediator
             receptacles = get_all_scenedataset_receptacles(ep_gen.sim)
+            list_sep = "\n    "
             logger.info("==================================")
             logger.info("Listing SceneDataset Summary")
             logger.info("==================================")

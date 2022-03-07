@@ -4,7 +4,7 @@ ENVIRONMENT:
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/replica_cad/v0/{split}/no_container_50k_1k.json.gz
+    DATA_PATH: data/datasets/replica_cad/rearrange/v1/{split}/all_receptacles_10k_1k.json.gz
     SCENES_DIR: "data/replica_cad/"
 TASK:
     TYPE: RearrangePickTask-v0
@@ -13,6 +13,8 @@ TASK:
     COUNT_ROBOT_OBJ_COLLS: False
     DESIRED_RESTING_POSITION: [0.5, 0.0, 1.0]
     CONSTRAINT_VIOLATION_ENDS_EPISODE: True
+
+    SHOULD_ENFORCE_TARGET_WITHIN_REACH: False
 
     # In radians
     BASE_ANGLE_NOISE: 0.15

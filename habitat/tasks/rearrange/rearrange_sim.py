@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import magnum as mn
 import numpy as np
+import numpy.typing as npt
 
 import habitat_sim
 from habitat.config.default import Config
@@ -442,7 +443,7 @@ class RearrangeSim(HabitatSim):
         for aoi_handle in ao_mgr.get_object_handles():
             self.art_objs.append(ao_mgr.get_object_by_handle(aoi_handle))
 
-    def _create_obj_viz(self, ep_info):
+    def _create_obj_viz(self, ep_info: Config):
         for marker_name, m in self._markers.items():
             m_T = m.get_current_transform()
             self.viz_ids[marker_name] = self.visualize_position(
@@ -633,7 +634,12 @@ class RearrangeSim(HabitatSim):
 
         return obs
 
-    def visualize_position(self, position, viz_id=None, r=0.05) -> int:
+    def visualize_position(
+        self,
+        position: np.ndarray,
+        viz_id: Optional[int] = None,
+        r: float = 0.05,
+    ) -> int:
         """Adds the sphere object to the specified position for visualization purpose."""
 
         template_mgr = self.get_object_template_manager()
@@ -645,10 +651,12 @@ class RearrangeSim(HabitatSim):
                     template_mgr.get_template_handles("sphere")[0]
                 )
                 template.scale = mn.Vector3(r, r, r)
-                self._viz_templates[r] = template_mgr.register_template(
-                    template, "ball_new_viz"
+                self._viz_templates[str(r)] = template_mgr.register_template(
+                    template, "ball_new_viz_" + str(r)
                 )
-            viz_obj = rom.add_object_by_template_id(self._viz_templates[r])
+            viz_obj = rom.add_object_by_template_id(
+                self._viz_templates[str(r)]
+            )
             make_render_only(viz_obj, self)
             self._viz_handle_to_template[viz_obj.object_id] = r
         else:

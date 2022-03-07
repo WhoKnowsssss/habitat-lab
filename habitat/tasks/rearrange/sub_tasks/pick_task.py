@@ -6,6 +6,7 @@
 
 import os.path as osp
 
+import magnum as mn
 import numpy as np
 
 from habitat.core.dataset import Episode
@@ -17,6 +18,7 @@ from habitat.tasks.utils import get_angle
 
 @registry.register_task(name="RearrangePickTask-v0")
 class RearrangePickTaskV1(RearrangeTask):
+    DISTANCE_TO_RECEPTACLE = 1.0
     """
     Rearrange Pick Task with Fetch robot interacting with objects and environment.
     """
@@ -35,7 +37,7 @@ class RearrangePickTaskV1(RearrangeTask):
         self.cache = CacheHelper(
             "start_pos", cache_name, {}, verbose=False, rel_dir=fname
         )
-        self.start_states = self.cache.load()
+        self.start_states = {}  # self.cache.load()
         self.prev_colls = None
         self.force_set_idx = None
 
@@ -45,7 +47,7 @@ class RearrangePickTaskV1(RearrangeTask):
     def _get_targ_pos(self, sim):
         return sim.get_target_objs_start()
 
-    def _gen_start_pos(self, sim, is_easy_init, force_snap_pos=None):
+    def _gen_start_pos(self, sim, is_easy_init, episode, force_snap_pos=None):
         target_positions = self._get_targ_pos(sim)
         if self.force_set_idx is not None:
             sel_idx = self.force_set_idx
@@ -63,20 +65,20 @@ class RearrangePickTaskV1(RearrangeTask):
         state = sim.capture_state()
         start_pos = orig_start_pos
 
-        # Spawn 30 cm away from the target
-        rel_targ = targ_pos - start_pos
-        rel_targ[1] = 0
-        rel_targ /= np.linalg.norm(rel_targ)
-        start_pos -= rel_targ * 0.3
-
         forward = np.array([1.0, 0, 0])
         dist_thresh = 0.1
         did_collide = False
 
+        if self._config.SHOULD_ENFORCE_TARGET_WITHIN_REACH:
+            # Setting so the object is within reach is harder and requires more
+            # tries.
+            timeout = 5000
+        else:
+            timeout = 1000
+        attempt = 0
+
         # Add noise to the base position and angle for a collision free
         # starting position
-        timeout = 1000
-        attempt = 0
         while attempt < timeout:
             attempt += 1
             start_pos = orig_start_pos + np.random.normal(
@@ -104,6 +106,20 @@ class RearrangePickTaskV1(RearrangeTask):
             rot_noise = np.random.normal(0.0, self._config.BASE_ANGLE_NOISE)
             sim.robot.base_rot = angle_to_obj + rot_noise
 
+            # Ensure the target is within reach
+            is_within_bounds = True
+            if self._config.SHOULD_ENFORCE_TARGET_WITHIN_REACH:
+                robot_T = self._sim.robot.base_transformation
+                rel_targ_pos = robot_T.inverted().transform_point(targ_pos)
+                eps = 1e-2
+                lower_bound = self._sim.robot.params.ee_constraint[:, 0] - eps
+                upper_bound = self._sim.robot.params.ee_constraint[:, 1] + eps
+                is_within_bounds = (lower_bound < rel_targ_pos).all() and (
+                    rel_targ_pos < upper_bound
+                ).all()
+                if not is_within_bounds:
+                    continue
+
             # Make sure the robot is not colliding with anything in this
             # position.
             for _ in range(100):
@@ -125,7 +141,16 @@ class RearrangePickTaskV1(RearrangeTask):
                 break
 
         if attempt == timeout - 1 and (not is_easy_init):
-            start_pos, angle_to_obj, sel_idx = self._gen_start_pos(sim, True)
+            start_pos, angle_to_obj, sel_idx = self._gen_start_pos(
+                sim, True, episode
+            )
+
+        if not is_within_bounds:
+            print(f"Episode {episode.episode_id} failed to place robot")
+
+            # raise ValueError(
+            #
+            # )
 
         sim.set_state(state)
 
@@ -164,26 +189,39 @@ class RearrangePickTaskV1(RearrangeTask):
         else:
             mgr = sim.get_articulated_object_manager()
             start_pos = None
-            if len(episode.targets.keys()) == 1:
-                target_key = list(episode.targets.keys())[0]
-
-                receptacle_ao = None
-                if target_key in episode.target_receptacles:
-                    receptacle_ao = mgr.get_object_by_handle(
-                        episode.target_receptacles[target_key]
-                    )
-                if receptacle_ao is not None:
-                    # There is only one target inside an articulated object receptacle
-                    # The start position is in front of the receptcacle
-                    start_pos = (
-                        receptacle_ao.translation
-                        + receptacle_ao.rotation.transform_vector(
-                            np.array([0.1, 0, 0])
+            if (
+                len(episode.targets.keys()) == 1
+                and episode.target_receptacles is not None
+            ):
+                receptacle_handle = episode.target_receptacles[0]
+                receptacle_link_idx = episode.target_receptacles[1]
+                if (
+                    # Not a typo, "fridge" is sometimes "frige" in
+                    # ReplicaCAD.
+                    "frige" in receptacle_handle
+                    or "fridge" in receptacle_handle
+                ):
+                    receptacle_ao = mgr.get_object_by_handle(receptacle_handle)
+                    start_pos = np.array(
+                        receptacle_ao.transformation.transform_point(
+                            mn.Vector3(self.DISTANCE_TO_RECEPTACLE, 0, 0)
                         )
                     )
-                    start_pos = np.array(start_pos)
+
+                if (
+                    "kitchen_counter" in receptacle_handle
+                    and receptacle_link_idx != 0
+                ):
+                    receptacle_ao = mgr.get_object_by_handle(receptacle_handle)
+                    link_T = receptacle_ao.get_link_scene_node(
+                        receptacle_link_idx
+                    ).transformation
+                    start_pos = np.array(
+                        link_T.transform_point(mn.Vector3(0.8, 0, 0))
+                    )
+
             start_pos, start_rot, sel_idx = self._gen_start_pos(
-                sim, self._config.EASY_INIT, start_pos
+                sim, self._config.EASY_INIT, episode, start_pos
             )
             self.start_states[episode_id] = (start_pos, start_rot, sel_idx)
             self.cache.save(self.start_states)

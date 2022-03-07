@@ -49,6 +49,9 @@ from habitat_baselines.rl.ddppo.ddp_utils import (
 from habitat_baselines.rl.ddppo.policy import (  # noqa: F401.
     PointNavResNetPolicy,
 )
+from habitat_baselines.rl.hrl.hierarchical_policy import (  # noqa: F401.
+    HierarchicalPolicy,
+)
 from habitat_baselines.rl.ppo import PPO
 from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.utils.common import (
@@ -60,6 +63,7 @@ from habitat_baselines.utils.common import (
     is_continuous_action_space,
 )
 from habitat_baselines.utils.env_utils import construct_envs
+from habitat_baselines.utils.render_wrapper import overlay_frame
 
 
 @baseline_registry.register_trainer(name="ddppo")
@@ -671,7 +675,7 @@ class PPOTrainer(BaseRLTrainer):
             writer.add_scalar(f"losses/{k}", v, self.num_steps_done)
 
         fps = self.num_steps_done / ((time.time() - self.t_start) + prev_time)
-        writer.add_scalar(f"metrics/fps", fps, self.num_steps_done)
+        writer.add_scalar("metrics/fps", fps, self.num_steps_done)
 
         # log stats
         if self.num_updates_done % self.config.LOG_INTERVAL == 0:
@@ -911,7 +915,10 @@ class PPOTrainer(BaseRLTrainer):
         config.TASK_CONFIG.DATASET.SPLIT = config.EVAL.SPLIT
         config.freeze()
 
-        if len(self.config.VIDEO_OPTION) > 0:
+        if (
+            len(self.config.VIDEO_OPTION) > 0
+            and self.config.VIDEO_RENDER_TOP_DOWN
+        ):
             config.defrost()
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP")
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("COLLISIONS")
@@ -942,7 +949,7 @@ class PPOTrainer(BaseRLTrainer):
 
         self._setup_actor_critic_agent(ppo_cfg)
 
-        self.agent.load_state_dict(ckpt_dict["state_dict"])
+        # self.agent.load_state_dict(ckpt_dict["state_dict"])
         self.actor_critic = self.agent.actor_critic
 
         observations = self.envs.reset()
@@ -957,7 +964,7 @@ class PPOTrainer(BaseRLTrainer):
 
         test_recurrent_hidden_states = torch.zeros(
             self.config.NUM_ENVIRONMENTS,
-            self.actor_critic.net.num_recurrent_layers,
+            self.actor_critic.num_recurrent_layers,
             ppo_cfg.hidden_size,
             device=self.device,
         )
@@ -1137,8 +1144,9 @@ class PPOTrainer(BaseRLTrainer):
                         all_actions = []
 
                     pbar.update()
-                    episode_stats = {}
-                    episode_stats["reward"] = current_episode_reward[i].item()
+                    episode_stats = {
+                        "reward": current_episode_reward[i].item()
+                    }
                     episode_stats.update(
                         self._extract_scalars_from_info(infos[i])
                     )
@@ -1159,6 +1167,7 @@ class PPOTrainer(BaseRLTrainer):
                             episode_id=current_episodes[i].episode_id,
                             checkpoint_idx=checkpoint_index,
                             metrics=self._extract_scalars_from_info(infos[i]),
+                            fps=self.config.VIDEO_FPS,
                             tb_writer=writer,
                             keys_to_include_in_name=self.config.EVAL_KEYS_TO_INCLUDE_IN_NAME,
                         )
@@ -1171,6 +1180,9 @@ class PPOTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
+                    if self.config.VIDEO_RENDER_ALL_INFO:
+                        frame = overlay_frame(frame, infos[i])
+
                     rgb_frames[i].append(frame)
 
             not_done_masks = not_done_masks.to(device=self.device)
