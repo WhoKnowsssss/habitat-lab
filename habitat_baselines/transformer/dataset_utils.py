@@ -61,6 +61,7 @@ def read_dataset(
                 if terminal[0] == 1:
                     done_idxs += [len(obss)]
                     curr_num_transitions = done_idxs[-1]
+
                     returns += [0]
                     if trajectories_to_load == 0:
                         done = True
@@ -85,6 +86,10 @@ def read_dataset(
                     i, len(obss), num_trajectories
                 )
             )
+
+        # debug
+        l = np.array(done_idxs[1:]) - np.array(done_idxs[:-1])
+        assert all(l <= 200), f"file:  {file}  dn:  {done_idxs}"
 
     actions = np.array(actions)
     returns = np.array(returns, dtype=np.float32)
@@ -130,6 +135,7 @@ def read_dataset(
             )
         )
 
+
     return obss, actions, done_idxs, rtg, timesteps
 
 def producer(
@@ -139,7 +145,7 @@ def producer(
     verbose: bool,
 ):
     while True:
-        if len(deque) < 2:
+        if len(deque) < 1:
             deque.append(read_dataset(config, verbose, rng))
             time.sleep(2)
         else:

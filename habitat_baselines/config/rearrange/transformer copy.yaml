@@ -8,29 +8,21 @@ VIDEO_OPTION: []
 TENSORBOARD_DIR: "tb"
 VIDEO_DIR: "video_dir"
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/new_checkpoints_5"
-NUM_ENVIRONMENTS: 64
-WRITER_TYPE: 'wb'
+EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
+NUM_ENVIRONMENTS: 4
+WRITER_TYPE: 'tb'
 # Visual sensors to include
 SENSORS: ["HEAD_DEPTH_SENSOR"]
-CHECKPOINT_FOLDER: "data/new_checkpoints_5"
+CHECKPOINT_FOLDER: "data/new_checkpoints"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 2.5e9
 LOG_INTERVAL: 10
-NUM_CHECKPOINTS: -1
-CHECKPOINT_INTERVAL: 20
+NUM_CHECKPOINTS: 100
 # Force PyTorch to be single threaded as
 # this improves performance considerably
 FORCE_TORCH_SINGLE_THREADED: True
 
 GYM_AUTO_NAME: "Pick"
-WB:
-  PROJECT_NAME: "habitat"
-  ENTITY: "haytham-huang"
-  RUN_NAME: "train"
-  GROUP: "lower_debug_2"
-
-
 
 RL:
 
@@ -46,32 +38,32 @@ RL:
   GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position']
 
   TRAJECTORY_DATASET:
-    trajectory_dir: "/srv/cvmlp-lab/share/xhuang394/demos_lower_half"
-    steps_per_load: 5.0E+4
-    steps_to_reload: 1.5E+5
-    trajs_per_file: 1.0E+2
-
+    trajectory_dir: "/srv/cvmlp-lab/share/aszot3/share_demos/pick_02_09"
+    steps_per_training: 1.0E+5
+    trajs_per_file: 1.0E+4
+    iters_per_load: 4.0E+5
 
   TRANSFORMER:
-    lr: 2.0E-3
+    lr: 1.0E-4
     eps: 1.0E-5
     grad_norm_clip: 1.0
     use_linear_lr_decay: True
-    batch_size: 300 # 160
+    batch_size: 128
     num_workers: 2
 
 
 
 
-    return_to_go: 50
+    return_to_go: 128
     
     num_mini_batch: 2
     context_length: 30
-    max_episode_step: 400
+    max_episode_step: 200
     model_type: "reward_conditioned"
     n_head: 8
     n_layer: 6
     use_linear_clip_decay: False
+    use_linear_lr_decay: False
     reward_window_size: 50
 
     use_normalized_advantage: False
@@ -87,7 +79,7 @@ RL:
     # The PyTorch distributed backend to use
     distrib_backend: NCCL
     # Visual encoder backbone
-    pretrained_weights: /srv/cvmlp-lab/share/aszot3/share_demos/model.pth #
+    pretrained_weights: /srv/cvmlp-lab/share/aszot3/share_demos/model.pth # data/ddppo-models/gibson-2plus-resnet50.pth
     # Initialize with pretrained weights
     pretrained: False
     # Initialize just the visual encoder backbone with pretrained weights
@@ -96,4 +88,4 @@ RL:
     train_encoder: False
 
     # Model parameters
-    backbone: resnet50 # resnet18
+    backbone: resnet50

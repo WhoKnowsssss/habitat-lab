@@ -635,7 +635,7 @@ class TransformerTrainer(BaseRLTrainer):
         lr_scheduler = GradualWarmupScheduler(
             self.optimizer, 
             multiplier=1, 
-            total_epoch=100, 
+            total_epoch=50, 
             after_scheduler=lr_scheduler_after
         )
 
@@ -705,7 +705,7 @@ class TransformerTrainer(BaseRLTrainer):
                     return
 
                 self.train_dataset.set_epoch(self.num_updates_done)
-
+      
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 
                 loss = self._all_reduce(loss)
@@ -964,6 +964,7 @@ class TransformerTrainer(BaseRLTrainer):
 
                     valid_context[i] = 1
                     timesteps[i,0,0] = 0
+                    rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
 
                     if len(self.config.VIDEO_OPTION) > 0:
                         generate_video(
@@ -989,6 +990,8 @@ class TransformerTrainer(BaseRLTrainer):
 
                     for k, v in aggregated_stats.items():
                         logger.info(f"Average episode {k}: {v:.4f}")
+
+                    
 
                 # episode continues
                 elif len(self.config.VIDEO_OPTION) > 0:
@@ -1042,6 +1045,11 @@ class TransformerTrainer(BaseRLTrainer):
             {"average reward": aggregated_stats["reward"]},
             step_id,
         )
+
+        rewards = np.array([v['reward'] for v in stats_episodes.values()])
+        rewards.tofile('rewards_{}.csv'.format(self.config.RL.TRANSFORMER.return_to_go),sep=',')
+
+        
 
         metrics = {k: v for k, v in aggregated_stats.items() if k != "reward"}
         if len(metrics) > 0:
