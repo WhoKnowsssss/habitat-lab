@@ -1122,7 +1122,16 @@ class PPOTrainer(BaseRLTrainer):
                 # episode ended
                 if not not_done_masks[i].item():
                     # Flush buffer to the final dataset
-                    all_obs.extend(buffer_obs[i])
+                    all_obs.extend(
+                        [
+                            {
+                                k: v
+                                for k, v in obs.items()
+                                if k in self.config.RL.GYM_OBS_KEYS
+                            }
+                            for obs in buffer_obs[i]
+                        ]
+                    )
                     all_rewards.extend(buffer_rewards[i])
                     all_masks.extend(buffer_masks[i])
                     all_actions.extend(buffer_actions[i])
