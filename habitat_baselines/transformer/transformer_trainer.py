@@ -160,7 +160,7 @@ class TransformerTrainer(BaseRLTrainer):
             )
 
         if self.config.RL.TRANSFORMER.pretrained:
-            prefix = "module."
+            prefix = ""
             self.transformer_policy.load_state_dict(
                 {
                     k[k.find(prefix) + len(prefix) :]: v
@@ -793,7 +793,7 @@ class TransformerTrainer(BaseRLTrainer):
         self._setup_transformer_policy()
 
         # self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
-        prefix = "module."
+        prefix = ""
         self.transformer_policy.load_state_dict(
             {
                 k[k.find(prefix) + len(prefix) :]: v

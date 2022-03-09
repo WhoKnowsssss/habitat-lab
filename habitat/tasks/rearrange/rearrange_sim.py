@@ -302,7 +302,7 @@ class RearrangeSim(HabitatSim):
 
     def get_nav_pos(self, pos):
         pos = mn.Vector3(*pos)
-        height_thresh = 0.15
+        height_thresh = 0.16
         z_min = -0.2
         use_vs = np.array(self.pathfinder.build_navmesh_vertices())
 
