@@ -1018,6 +1018,7 @@ class PPOTrainer(BaseRLTrainer):
                     "rewards": all_rewards,
                     "masks": all_masks,
                     "actions": all_actions,
+                    "infos": all_infos,
                 },
                 save_path,
             )
@@ -1033,11 +1034,13 @@ class PPOTrainer(BaseRLTrainer):
         all_rewards = []
         all_masks = []
         all_actions = []
+        all_infos = []
 
         buffer_obs = defaultdict(list)
         buffer_rewards = defaultdict(list)
         buffer_masks = defaultdict(list)
         buffer_actions = defaultdict(list)
+        buffer_infos = defaultdict(list)
         saved_num_episodes = 0
 
         visual_batch = get_save_obs(batch)
@@ -1112,6 +1115,9 @@ class PPOTrainer(BaseRLTrainer):
                 buffer_rewards[i].append(rewards[i])
                 buffer_masks[i].append(not_done_masks[i])
                 buffer_actions[i].append(actions[i])
+                buffer_infos[i].append(
+                    {"episode": next_episodes[i].episode_id}
+                )
 
                 if (
                     next_episodes[i].scene_id,
@@ -1135,6 +1141,7 @@ class PPOTrainer(BaseRLTrainer):
                     all_rewards.extend(buffer_rewards[i])
                     all_masks.extend(buffer_masks[i])
                     all_actions.extend(buffer_actions[i])
+                    all_infos.extend(buffer_infos[i])
                     saved_num_episodes += 1
 
                     buffer_obs[i] = []
@@ -1151,6 +1158,7 @@ class PPOTrainer(BaseRLTrainer):
                         all_rewards = []
                         all_masks = []
                         all_actions = []
+                        all_infos = []
 
                     pbar.update()
                     episode_stats = {
