@@ -7,9 +7,11 @@
 import math
 import random
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import magnum as mn
+import numpy as np
 
 import habitat.sims.habitat_simulator.sim_utilities as sutils
 import habitat_sim
@@ -75,8 +77,12 @@ class ObjectSampler:
         ],
         num_objects: Tuple[int, int] = (1, 1),
         orientation_sample: Optional[str] = None,
-        sample_region_ratio: float = 1.0,
+        sample_region_ratio: Optional[Dict[str, float]] = None,
+        nav_to_min_distance: float = -1.0,
     ) -> None:
+        """
+        :param nav_to_min_distance: -1.0 means there will be accessibility constraint.
+        """
         self.object_set = object_set
         self.receptacle_sets = receptacle_sets
         self.receptacle_instances: Optional[
@@ -93,7 +99,10 @@ class ObjectSampler:
         self.orientation_sample = (
             orientation_sample  # None, "up" (1D), "all" (rand quat)
         )
+        if sample_region_ratio is None:
+            sample_region_ratio = defaultdict(lambda: 1.0)
         self.sample_region_ratio = sample_region_ratio
+        self.nav_to_min_distance = nav_to_min_distance
         # More possible parameters of note:
         # - surface vs volume
         # - apply physics stabilization: none, dynamic, projection
@@ -211,12 +220,19 @@ class ObjectSampler:
         """
         num_placement_tries = 0
         new_object = None
+        navmesh_vertices = np.stack(
+            sim.pathfinder.build_navmesh_vertices(), axis=0
+        )
+        self.largest_island_size = max(
+            [sim.pathfinder.island_radius(p) for p in navmesh_vertices]
+        )
+
         while num_placement_tries < self.max_placement_attempts:
             num_placement_tries += 1
 
             # sample the object location
             target_object_position = receptacle.sample_uniform_global(
-                sim, self.sample_region_ratio
+                sim, self.sample_region_ratio[receptacle.name]
             )
 
             # instance the new potential object from the handle
@@ -275,12 +291,16 @@ class ObjectSampler:
                     logger.info(
                         f"Successfully sampled (snapped) object placement in {num_placement_tries} tries."
                     )
+                    if not self.is_accessible(sim, new_object):
+                        continue
                     return new_object
 
             elif not new_object.contact_test():
                 logger.info(
                     f"Successfully sampled object placement in {num_placement_tries} tries."
                 )
+                if not self.is_accessible(sim, new_object):
+                    continue
                 return new_object
 
         # if num_placement_tries > self.max_placement_attempts:
@@ -292,6 +312,19 @@ class ObjectSampler:
         )
 
         return None
+
+    def is_accessible(self, sim, new_object):
+        if self.nav_to_min_distance == -1:
+            return True
+        snapped = sim.pathfinder.snap_point(new_object.translation)
+        island_radius = sim.pathfinder.island_radius(snapped)
+        dist = np.linalg.norm(
+            np.array((snapped - new_object.translation))[[0, 2]]
+        )
+        return (
+            dist < self.nav_to_min_distance
+            and island_radius == self.largest_island_size
+        )
 
     def single_sample(
         self,
@@ -388,6 +421,8 @@ class ObjectTargetSampler(ObjectSampler):
         target_number,
         num_targets: Tuple[int, int] = (1, 1),
         orientation_sample: Optional[str] = None,
+        sample_region_ratio: Optional[Dict[str, float]] = None,
+        nav_to_min_distance: float = -1.0,
     ) -> None:
         """
         Initialize a standard ObjectSampler but construct the object_set to correspond with specific object instances provided.
@@ -397,7 +432,12 @@ class ObjectTargetSampler(ObjectSampler):
             x.creation_attributes.handle for x in self.object_instance_set
         ]
         super().__init__(
-            object_set, receptacle_sets, num_targets, orientation_sample
+            object_set,
+            receptacle_sets,
+            num_targets,
+            orientation_sample,
+            sample_region_ratio,
+            nav_to_min_distance,
         )
 
         self.target_number = target_number
@@ -554,7 +594,8 @@ class CompositeArticulatedObjectStateSampler(ArticulatedObjectStateSampler):
     """
 
     def __init__(
-        self, ao_sampler_params: Dict[str, Dict[str, Tuple[float, float]]]
+        self,
+        ao_sampler_params: Dict[str, Dict[str, Tuple[float, float, bool]]],
     ) -> None:
         """
         ao_sampler_params : {ao_handle -> {link_name -> (min, max)}}
@@ -595,7 +636,7 @@ class CompositeArticulatedObjectStateSampler(ArticulatedObjectStateSampler):
         # construct an efficiently iterable structure for reject sampling of link states
         link_sample_params: Dict[
             habitat_sim.physics.ManagedArticulatedObject,
-            Dict[int, Tuple[float, float]],
+            Dict[int, Tuple[float, float, bool]],
         ] = {}
         for ao_handle, ao_instances in matching_ao_instances.items():
             for ao_instance in ao_instances:
@@ -621,7 +662,7 @@ class CompositeArticulatedObjectStateSampler(ArticulatedObjectStateSampler):
                 # NOTE: only query and set pose once per instance for efficiency
                 pose = ao_instance.joint_positions
                 for link_ix, joint_range in link_ranges.items():
-
+                    should_sample_all_joints = joint_range[2]
                     matching_recep = None
                     for recep in receptacles:
                         if ao_instance.handle == recep.parent_object_handle:
@@ -630,14 +671,19 @@ class CompositeArticulatedObjectStateSampler(ArticulatedObjectStateSampler):
 
                     if matching_recep is not None and (
                         (link_ix == matching_recep.parent_link)
-                        or ("frige" in matching_recep.parent_object_handle)
-                        or ("fridge" in matching_recep.parent_object_handle)
+                        or should_sample_all_joints
                     ):
+                        # If this is true, this means that the receptacle AO must be opened. That is because
+                        # the object is spawned inside the fridge OR inside the kitchen counter BUT not on top of the counter
+                        # because in this case all drawers must be closed.
+                        # TODO: move this receptacle access logic to the ao_config files in a future refactor
                         joint_state = random.uniform(
                             joint_range[0], joint_range[1]
                         )
                     else:
-                        joint_state = 0.0
+                        joint_state = pose[
+                            ao_instance.get_link_joint_pos_offset(link_ix)
+                        ]
                     pose[
                         ao_instance.get_link_joint_pos_offset(link_ix)
                     ] = joint_state
