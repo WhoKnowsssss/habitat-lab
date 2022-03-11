@@ -29,6 +29,7 @@ RL:
   POLICY:
       name: "TransformerResNetPolicy"
       action_distribution_type: "gaussian"
+      include_visual_keys: ["robot_head_depth"]
       
 
   REWARD_MEASURE: "composite_reward"
@@ -39,9 +40,9 @@ RL:
 
   TRAJECTORY_DATASET:
     trajectory_dir: "./data/temp_data"
-    steps_per_load: 300
-    steps_to_reload: 1.5E+5
-    trajs_per_file: 1.0E+2
+    steps_per_load: 1500
+    steps_to_reload: 15000
+    trajs_per_file: 10
 
 
   TRANSFORMER:
@@ -55,7 +56,7 @@ RL:
 
 
 
-    return_to_go: 200
+    return_to_go: 120
     
     num_mini_batch: 2
     context_length: 30
@@ -81,14 +82,14 @@ RL:
     # Visual encoder backbone
     pretrained_weights: data/new_checkpoints/ckpt.0.pth #
     # Initialize with pretrained weights
-    pretrained: True
+    pretrained: False
     # Initialize just the visual encoder backbone with pretrained weights
     pretrained_encoder: False
     # Whether or not the visual encoder backbone will be trained.
     train_encoder: True
 
     # Model parameters
-    backbone: resnet50 # resnet18
+    backbone: resnet18 # resnet18
 
   
 

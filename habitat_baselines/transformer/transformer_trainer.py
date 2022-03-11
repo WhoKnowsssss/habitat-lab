@@ -761,7 +761,10 @@ class TransformerTrainer(BaseRLTrainer):
         config.TASK_CONFIG.DATASET.SPLIT = config.EVAL.SPLIT
         config.freeze()
 
-        if len(self.config.VIDEO_OPTION) > 0:
+        if (
+            len(self.config.VIDEO_OPTION) > 0
+            and self.config.VIDEO_RENDER_TOP_DOWN
+        ):
             config.defrost()
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP")
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("COLLISIONS")
@@ -793,12 +796,13 @@ class TransformerTrainer(BaseRLTrainer):
         self._setup_transformer_policy()
 
         # self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
-        prefix = ""
+        prefix = "module."
+        # prefix= ''
         self.transformer_policy.load_state_dict(
             {
                 k[k.find(prefix) + len(prefix) :]: v
                 for k, v in ckpt_dict["state_dict"].items()
-                if prefix in k
+                if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
         )
 
@@ -813,7 +817,7 @@ class TransformerTrainer(BaseRLTrainer):
         )
 
         prev_actions = torch.zeros(
-            self.config.NUM_ENVIRONMENTS, self.config.RL.TRANSFORMER.context_length-1,
+            self.config.NUM_ENVIRONMENTS, self.config.RL.TRANSFORMER.context_length,
             *action_shape,
             device=self.device,
             dtype=torch.long if discrete_actions else torch.float,
@@ -870,6 +874,11 @@ class TransformerTrainer(BaseRLTrainer):
         pbar = tqdm(total=number_of_eval_episodes)
         self.transformer_policy.eval()
 
+        self.gt_actions = torch.load('data/temp_data/10.pt', map_location=torch.device('cpu'))["actions"]
+        self.gt_observations = torch.load('data/temp_data/10.pt', map_location=torch.device('cpu'))["obs"]
+        idxxx=0
+
+            
         while (
             len(stats_episodes) < number_of_eval_episodes
             and self.envs.num_envs > 0
@@ -886,6 +895,16 @@ class TransformerTrainer(BaseRLTrainer):
                     valid_context=valid_context,
                 )
 
+            if idxxx < 145:
+                actions = torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
+            else:
+                a = 10 + 1
+            differnce = actions - torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
+            print(differnce, self.gt_actions[idxxx])
+            gt_observations = self.gt_observations[idxxx]
+            # print(gt_observations['robot_head_depth'] - observations[0]['robot_head_depth'])
+            differnce = [sum(abs(gt_observations[k] - observations[0][k])) for k in gt_observations.keys()]
+            idxxx += 1
             # if timesteps[0,0,0].item() == 49:
             #     print()
             prev_actions = torch.cat((prev_actions[:,1:,:], actions.unsqueeze(1)), dim=1)  # type: ignore

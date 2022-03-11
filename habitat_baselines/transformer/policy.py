@@ -62,9 +62,11 @@ class TransformerResNetPolicy(nn.Module, Policy):
             self.action_distribution_type = (
                 policy_config.action_distribution_type
             )
+            include_visual_keys = policy_config.include_visual_keys
         else:
             discrete_actions = True
             self.action_distribution_type = "categorical"
+            include_visual_keys = None
 
         self.net = TransformerResnetNet(
                 observation_space=observation_space,
@@ -81,6 +83,7 @@ class TransformerResNetPolicy(nn.Module, Policy):
                 force_blind_policy=force_blind_policy,
                 discrete_actions=discrete_actions,
                 fuse_keys=fuse_keys,
+                include_visual_keys=include_visual_keys
             )
 
     @classmethod
@@ -176,6 +179,8 @@ class TransformerResnetNet(Net):
         force_blind_policy: bool = False,
         discrete_actions: bool = True,
         fuse_keys: Optional[List[str]] = None,
+        include_visual_keys: Optional[List[str]] = None,
+        separate_locomotion: Optional[bool] = False
     ):
         super().__init__()
         self.context_length = context_length
@@ -188,7 +193,11 @@ class TransformerResnetNet(Net):
 
         # self._n_prev_action = 32
         # rnn_input_size = self._n_prev_action
+        self.separate_locomotion = separate_locomotion
+        if separate_locomotion:
+            num_actions += 1
         rnn_input_size = 0
+        self.include_visual_keys = include_visual_keys
 
         self._fuse_keys = fuse_keys
         if self._fuse_keys is not None:
@@ -285,8 +294,21 @@ class TransformerResnetNet(Net):
 
         self._hidden_size = hidden_size
 
+        if force_blind_policy:
+            use_obs_space = spaces.Dict({})
+        elif self.include_visual_keys is not None and len(self.include_visual_keys) != 0:
+            use_obs_space = spaces.Dict(
+                {
+                    k: v
+                    for k, v in observation_space.spaces.items()
+                    if k in self.include_visual_keys
+                }
+            )
+        else:
+            use_obs_space = observation_space
+
         self.visual_encoder = ResNetEncoder(
-            observation_space if not force_blind_policy else spaces.Dict({}),
+            use_obs_space,
             baseplanes=resnet_baseplanes,
             ngroups=resnet_baseplanes // 2,
             make_backbone=getattr(resnet, backbone),
@@ -442,16 +464,26 @@ class TransformerResnetNet(Net):
         if outs.shape[1] < self.context_length and (current_context is not None):
             outs = torch.cat((torch.zeros((outs.shape[0], self.context_length - outs.shape[1], outs.shape[2]), device=outs.device), outs), dim=1)
         
+        prev_actions_ = torch.clone(prev_actions)
+        if self.separate_locomotion:
+            prev_actions_ = torch.cat((prev_actions_, torch.all(prev_actions_[:,:,7:] == 0, dim=-1, keepdim=True).float()), dim=-1)
+        
+        
+        
         # Move valid state-action-reward pair to the left
         if current_context is not None:
             rtgs_ = torch.clone(rtgs)
-            prev_actions_ = torch.clone(prev_actions)
             for i in range(current_context.shape[0]):
                 rtgs_[i,:,:] = torch.cat((rtgs_[i,-current_context[i]:,:],torch.zeros_like(rtgs_[i,:-current_context[i],:])), dim=-2)
-                prev_actions_[i,:,:] = torch.cat((prev_actions_[i,-current_context[i]+1:,:],torch.zeros_like(prev_actions_[i,:-current_context[i]+1,:])), dim=-2)
+                prev_actions_[i,:,:] = torch.cat((prev_actions_[i,-current_context[i]:,:],torch.zeros_like(prev_actions_[i,:-current_context[i],:])), dim=-2)
                 outs[i,:,:] = torch.cat((outs[i,-current_context[i]:,:],torch.zeros_like(outs[i,:-current_context[i],:])), dim=-2)
             logits, loss = self.state_encoder(outs, prev_actions_, targets=targets, rtgs=rtgs_, timesteps=timesteps)
+
+            if self.separate_locomotion:
+                mask = logits[:,:,-1] < 0.5
+                logits[:,:,:7][mask] *= 0
+                logits[:,:,7:][~mask] *= 0 
         else:
-            logits, loss = self.state_encoder(outs, prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps)
+            logits, loss = self.state_encoder(outs, prev_actions_, targets=prev_actions_, rtgs=rtgs, timesteps=timesteps)
 
         return logits, loss
