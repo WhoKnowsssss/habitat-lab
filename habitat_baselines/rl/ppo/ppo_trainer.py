@@ -1148,6 +1148,7 @@ class PPOTrainer(BaseRLTrainer):
                     buffer_rewards[i] = []
                     buffer_masks[i] = []
                     buffer_actions[i] = []
+                    buffer_infos[i] = []
 
                     if (
                         saved_num_episodes % self.config.DATASET_SAVE_INTERVAL
