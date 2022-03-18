@@ -120,7 +120,7 @@ object_samplers:
     params:
       object_sets: ["hab2"]
       receptacle_sets: ["clutter"]
-      num_samples: [1, 1]
+      num_samples: [27, 27]
       orientation_sampling: "up"
   -
     name: "obj0"
@@ -128,56 +128,69 @@ object_samplers:
     params:
       object_sets: ["obj0"]
       receptacle_sets: ["fridge"]
-      num_samples: [2, 2]
+      num_samples: [1, 1]
       orientation_sampling: "up"
       sample_region_ratio:
         "receptacle_aabb_middle_topfrl_apartment_refrigerator": 0.5
       nav_to_min_distance: 1.5
-    #-
-    #  name: "obj1"
-    #  type: "uniform"
-    #  params:
-    #    object_sets: ["obj1"]
-    #    receptacle_sets: ["fridge"]
-    #    num_samples: [1, 1]
-    #    orientation_sampling: "up"
-    #-
-    #  name: "obj2"
-    #  type: "uniform"
-    #  params:
-    #    object_sets: ["obj2"]
-    #    receptacle_sets: ["counter"]
-    #    num_samples: [1, 1]
-    #    orientation_sampling: "up"
+  -
+    name: "obj1"
+    type: "uniform"
+    params:
+      object_sets: ["obj1"]
+      receptacle_sets: ["fridge"]
+      num_samples: [1, 1]
+      orientation_sampling: "up"
+      sample_region_ratio:
+        "receptacle_aabb_middle_topfrl_apartment_refrigerator": 0.5
+      nav_to_min_distance: 1.5
+  -
+    name: "obj2"
+    type: "uniform"
+    params:
+      object_sets: ["obj2"]
+      receptacle_sets: ["counter"]
+      num_samples: [1, 1]
+      orientation_sampling: "up"
+      sample_region_ratio:
+        "receptacle_aabb_middle_topfrl_apartment_refrigerator": 0.5
+      nav_to_min_distance: 1.5
 
 object_target_samplers:
   -
-    name: "obj0"
+    name: "obj0_target"
     type: "uniform"
     params:
       object_samplers: ["obj0"]
       receptacle_sets: ["counter"]
-      num_samples: [2, 2]
+      num_samples: [1, 1]
       orientation_sampling: "up"
       sample_region_ratio:
         "receptacle_aabb_middle_topfrl_apartment_refrigerator": 0.5
       nav_to_min_distance: 1.5
-  #-
-  #  name: "obj1"
-  #  type: "uniform"
-  #  params:
-  #    object_samplers: ["obj1"]
-  #    receptacle_sets: ["counter"]
-  #    num_samples: [1, 1]
-  #    orientation_sampling: "up"
-  #-
-  #  name: "obj2"
-  #  type: "uniform"
-  #  params:
-  #    object_samplers: ["obj2"]
-  #    receptacle_sets: ["fridge"]
-  #    num_samples: [1, 1]
-  #    orientation_sampling: "up"
+  -
+    name: "obj1_target"
+    type: "uniform"
+    params:
+      object_samplers: ["obj1"]
+      receptacle_sets: ["counter"]
+      num_samples: [1, 1]
+      orientation_sampling: "up"
+      sample_region_ratio:
+        "receptacle_aabb_middle_topfrl_apartment_refrigerator": 0.5
+      nav_to_min_distance: 1.5
+  -
+    name: "obj2_target"
+    type: "uniform"
+    params:
+      object_samplers: ["obj2"]
+      receptacle_sets: ["fridge"]
+      num_samples: [1, 1]
+      orientation_sampling: "up"
+      sample_region_ratio:
+        "receptacle_aabb_middle_topfrl_apartment_refrigerator": 0.5
+      nav_to_min_distance: 1.5
+
 ao_state_samplers:
   -
     name: "open_fridge_cab"

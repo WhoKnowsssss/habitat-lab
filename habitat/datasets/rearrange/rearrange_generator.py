@@ -201,7 +201,7 @@ class RearrangeEpisodeGenerator:
                     for y in obj_sampler_info["params"]["object_sets"]
                     for x in self._obj_sets[y]
                 ]
-                object_handles = list(set(object_handles))
+                object_handles = sorted(set(object_handles))
                 receptacle_info = [
                     self._receptacle_sets[y]
                     for y in obj_sampler_info["params"]["receptacle_sets"]
@@ -289,7 +289,7 @@ class RearrangeEpisodeGenerator:
                 unified_scene_set += self._scene_sets[set_name]
 
             # cull duplicates
-            unified_scene_set = list(set(unified_scene_set))
+            unified_scene_set = sorted(set(unified_scene_set))
             self._scene_sampler = samplers.MultiSceneSampler(unified_scene_set)
         else:
             logger.error(
@@ -473,16 +473,25 @@ class RearrangeEpisodeGenerator:
             k: sampler.target_objects_number
             for k, sampler in self._target_samplers.items()
         }
-        target_receptacles = {}
+        targ_sampler_name_to_obj_sampler_names = {}
+        for targ_sampler_cfg in self.cfg.object_target_samplers:
+            sampler_name = targ_sampler_cfg["name"]
+            targ_sampler_name_to_obj_sampler_names[
+                sampler_name
+            ] = targ_sampler_cfg["params"]["object_samplers"]
+
+        target_receptacles = defaultdict(list)
         all_target_receptacles = []
         # for sampler_name, sampler in self._target_samplers.items():
-        for sampler, (sampler_name, num_targets) in zip(
-            self._obj_samplers.values(), target_numbers.items()
-        ):
+        for sampler_name, num_targets in target_numbers.items():
+            obj_sampler_name = targ_sampler_name_to_obj_sampler_names[
+                sampler_name
+            ][0]
+            sampler = self._obj_samplers[obj_sampler_name]
             new_target_receptacles = [
                 sampler.sample_receptacle(self.sim) for _ in range(num_targets)
             ]
-            target_receptacles[sampler_name] = new_target_receptacles
+            target_receptacles[obj_sampler_name].extend(new_target_receptacles)
             all_target_receptacles.extend(new_target_receptacles)
 
         goal_receptacles = {}
@@ -503,9 +512,8 @@ class RearrangeEpisodeGenerator:
             sampler_states = ao_state_sampler.sample(
                 self.sim, [*all_target_receptacles, *all_goal_receptacles]
             )
-            assert (
-                sampler_states is not None
-            ), f"AO sampler {sampler_name} failed"
+            if sampler_states is None:
+                return None
             for sampled_instance, link_states in sampler_states.items():
                 if sampled_instance.handle not in ao_states:
                     ao_states[sampled_instance.handle] = {}
@@ -522,7 +530,7 @@ class RearrangeEpisodeGenerator:
         for sampler_name, obj_sampler in self._obj_samplers.items():
             object_sample_data = obj_sampler.sample(
                 self.sim,
-                all_target_receptacles,
+                target_receptacles[sampler_name],
                 snap_down=True,
                 vdb=(self.vdb if self._render_debug_obs else None),
             )
@@ -574,12 +582,15 @@ class RearrangeEpisodeGenerator:
 
         # sample targets
         for sampler_name, target_sampler in self._target_samplers.items():
+            obj_sampler_name = targ_sampler_name_to_obj_sampler_names[
+                sampler_name
+            ][0]
             new_target_objects = target_sampler.sample(
                 self.sim,
                 snap_down=True,
                 vdb=self.vdb,
-                target_receptacles=target_receptacles[sampler_name],
-                goal_receptacles=all_goal_receptacles,
+                target_receptacles=target_receptacles[obj_sampler_name],
+                goal_receptacles=goal_receptacles[sampler_name],
                 object_to_containing_receptacle=object_to_containing_receptacle,
             )
             if new_target_objects is None:
@@ -590,7 +601,7 @@ class RearrangeEpisodeGenerator:
                 new_target_objects.items()
             ):
                 target_object, target_receptacle = value
-                target_receptacles[sampler_name][i] = target_receptacle
+                target_receptacles[obj_sampler_name][i] = target_receptacle
                 assert (
                     instance_handle not in self.episode_data["sampled_targets"]
                 ), f"Duplicate target for instance '{instance_handle}'."
@@ -1022,8 +1033,13 @@ if __name__ == "__main__":
         default=1,
         help="The number of episodes to generate.",
     )
+    parser.add_argument("--seed", type=int)
 
     args, _ = parser.parse_known_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
 
     # merge the configuration from file with the default
     cfg = get_config_defaults()

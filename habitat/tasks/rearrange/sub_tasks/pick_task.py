@@ -27,17 +27,14 @@ class RearrangePickTaskV1(RearrangeTask):
         super().__init__(config=config, *args, dataset=dataset, **kwargs)
         data_path = dataset.config.DATA_PATH.format(split=dataset.config.SPLIT)
 
-        mtime = osp.getmtime(data_path)
-        cache_name = str(mtime) + dataset.config.SPLIT
-        cache_name += str(self._config.BASE_NOISE)
-        cache_name = cache_name.replace(".", "_")
-
         fname = data_path.split("/")[-1].split(".")[0]
-
+        save_dir = osp.dirname(data_path)
         self.cache = CacheHelper(
-            "start_pos", cache_name, {}, verbose=False, rel_dir=fname
+            osp.join(save_dir, f"{fname}_{config.TYPE}_start.pickle"),
+            def_val={},
+            verbose=False,
         )
-        self.start_states = {}  # self.cache.load()
+        self.start_states = self.cache.load()
         self.prev_colls = None
         self.force_set_idx = None
 
@@ -45,7 +42,9 @@ class RearrangePickTaskV1(RearrangeTask):
         self.force_set_idx = obj
 
     def _get_targ_pos(self, sim):
-        return self._sim.get_targets()[1]
+        scene_pos = sim.get_scene_pos()
+        targ_idxs = sim.get_targets()[0]
+        return scene_pos[targ_idxs]
 
     def _sample_idx(self, sim):
         if self.force_set_idx is not None:
@@ -198,8 +197,11 @@ class RearrangePickTaskV1(RearrangeTask):
             if (
                 # Not a typo, "fridge" is sometimes "frige" in
                 # ReplicaCAD.
-                "frige" in receptacle_handle
-                or "fridge" in receptacle_handle
+                receptacle_handle is not None
+                and (
+                    "frige" in receptacle_handle
+                    or "fridge" in receptacle_handle
+                )
             ):
                 receptacle_ao = mgr.get_object_by_handle(receptacle_handle)
                 start_pos = np.array(
@@ -208,7 +210,8 @@ class RearrangePickTaskV1(RearrangeTask):
                     )
                 )
             elif (
-                "kitchen_counter" in receptacle_handle
+                receptacle_handle is not None
+                and "kitchen_counter" in receptacle_handle
                 and receptacle_link_idx != 0
             ):
                 receptacle_ao = mgr.get_object_by_handle(receptacle_handle)
