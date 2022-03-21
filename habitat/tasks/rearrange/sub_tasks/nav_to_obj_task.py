@@ -31,13 +31,12 @@ class DynNavRLEnv(RearrangeTask):
         self.nav_obj_name = None
 
         data_path = dataset.config.DATA_PATH.format(split=dataset.config.SPLIT)
-        mtime = osp.getmtime(data_path)
-        cache_name = str(mtime) + data_path
-        cache_name = cache_name.replace(".", "_")
-        cache_name += ",".join(self._config.FILTER_NAV_TO_TASKS)
         fname = data_path.split("/")[-1].split(".")[0]
+        save_dir = osp.dirname(data_path)
         self.cache = CacheHelper(
-            "dyn_nav_start_pos", cache_name, {}, verbose=True, rel_dir=fname
+            osp.join(save_dir, f"{fname}_{config.TYPE}_start.pickle"),
+            def_val={},
+            verbose=False,
         )
         self.start_states = self.cache.load()
         self.domain = None
@@ -115,10 +114,7 @@ class DynNavRLEnv(RearrangeTask):
 
     def _generate_nav_start_goal(self, episode):
         targ_pos, targ_angle, _ = self._determine_nav_pos(episode)
-        orig_nav_targ_pos = self._sim.get_nav_pos(targ_pos)
-        self._nav_target_pos = np.array(
-            self._sim.safe_snap_point(orig_nav_targ_pos)
-        )
+        self._nav_target_pos = np.array(self._sim.safe_snap_point(targ_pos))
 
         start_pos, start_rot = get_robo_start_pos(
             self._sim, self._nav_target_pos
@@ -161,9 +157,8 @@ class DynNavRLEnv(RearrangeTask):
                 targ_pos, self._nav_target_angle = self._get_nav_targ(
                     task_cls_name, task_args, episode
                 )
-                orig_nav_targ_pos = sim.get_nav_pos(targ_pos)
                 self._nav_target_pos = np.array(
-                    sim.safe_snap_point(orig_nav_targ_pos)
+                    self._sim.safe_snap_point(targ_pos)
                 )
                 self._nav_target_angle = float(self._nav_target_angle)
 

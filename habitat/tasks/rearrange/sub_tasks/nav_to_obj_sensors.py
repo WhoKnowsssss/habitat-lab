@@ -43,7 +43,7 @@ class DistToNavGoalSensor(Sensor):
             agent_pos,
             task.nav_target_pos,
         )
-        return distance_to_target
+        return np.array([distance_to_target])
 
 
 @registry.register_sensor
@@ -65,7 +65,7 @@ class NavGoalSensor(Sensor):
         )
 
     def get_observation(self, task, *args, **kwargs):
-        return task.nav_target_pos
+        return task.nav_target_pos.astype(np.float32)
 
 
 @registry.register_sensor

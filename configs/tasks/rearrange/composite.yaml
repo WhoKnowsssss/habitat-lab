@@ -1,4 +1,3 @@
-# Config for empty task to explore the scene.
 ENVIRONMENT:
     MAX_EPISODE_STEPS: 200
 DATASET:
@@ -82,7 +81,7 @@ TASK:
 
     ########################
     # General measures
-    FORCE_TERMINATE:
+    EXCESSIVE_FORCE_SHOULD_END:
         TYPE: "ForceTerminate"
         MAX_ACCUM_FORCE: -1.0
     ROBOT_FORCE:
@@ -173,7 +172,7 @@ TASK:
         # General measure
         - "OBJECT_TO_GOAL_DISTANCE"
         - "ROBOT_FORCE"
-        - "FORCE_TERMINATE"
+        - "EXCESSIVE_FORCE_SHOULD_END"
         - "ROBOT_COLLS"
         - "END_EFFECTOR_TO_REST_DISTANCE"
         - "END_EFFECTOR_TO_OBJECT_DISTANCE"
@@ -227,7 +226,6 @@ SIMULATOR:
     AGENTS: ['AGENT_0']
     CONCUR_RENDER: True
     AUTO_SLEEP: True
-    FORCE_RECOMPUTE_NAVMESH: False
     AGENT_0:
         HEIGHT: 1.5
         IS_SET_START_STATE: False
