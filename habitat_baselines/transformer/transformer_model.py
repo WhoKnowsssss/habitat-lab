@@ -124,7 +124,7 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # self.head_value = nn.Linear(config.n_embd, 1, bias=False)
+        self.head_value = nn.Linear(config.n_embd, 1, bias=False)
 
         self.block_size = config.block_size
         self.apply(self._init_weights)

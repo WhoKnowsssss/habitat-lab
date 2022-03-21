@@ -1,6 +1,6 @@
 # Config for empty task to explore the scene.
 ENVIRONMENT:
-    MAX_EPISODE_STEPS: 300
+    MAX_EPISODE_STEPS: 200
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train

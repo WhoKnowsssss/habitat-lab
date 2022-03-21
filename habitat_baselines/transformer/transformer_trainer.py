@@ -796,8 +796,11 @@ class TransformerTrainer(BaseRLTrainer):
         self._setup_transformer_policy()
 
         # self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
-        prefix = "module."
-        # prefix= ''
+        
+        prefix= ''
+        if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
+            prefix = "module."
+        
         self.transformer_policy.load_state_dict(
             {
                 k[k.find(prefix) + len(prefix) :]: v
@@ -874,8 +877,13 @@ class TransformerTrainer(BaseRLTrainer):
         pbar = tqdm(total=number_of_eval_episodes)
         self.transformer_policy.eval()
 
-        self.gt_actions = torch.load('data/temp_data/10.pt', map_location=torch.device('cpu'))["actions"]
-        self.gt_observations = torch.load('data/temp_data/10.pt', map_location=torch.device('cpu'))["obs"]
+        name_list = list(range(10,110,10))
+        name_list.reverse()
+        name__ = name_list.pop()
+        gt = torch.load('data/temp_data/{}.pt'.format(name__), map_location=torch.device('cpu'))
+        self.gt_actions = gt["actions"]
+        self.gt_observations = gt["obs"]
+        obs_fix = []
         idxxx=0
 
             
@@ -895,10 +903,20 @@ class TransformerTrainer(BaseRLTrainer):
                     valid_context=valid_context,
                 )
 
-            if idxxx < 145:
+            if idxxx < 130:
+                pass
                 actions = torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
             else:
-                a = 10 + 1
+                pass
+                # gt["obs_fix"] = obs_fix
+                # torch.save(gt, 'data/temp_data/{}_fix.pt'.format(name__))
+                # name__ = name_list.pop()
+                # gt = torch.load('data/temp_data/{}.pt'.format(name__), map_location=torch.device('cpu'))
+                # self.gt_actions = gt["actions"]
+                # self.gt_observations = gt["obs"]
+                # idxxx = 0
+                # obs_fix = []
+                # continue
             differnce = actions - torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
             print(differnce, self.gt_actions[idxxx])
             gt_observations = self.gt_observations[idxxx]
@@ -926,6 +944,9 @@ class TransformerTrainer(BaseRLTrainer):
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
+
+            obs_fix.append(observations[0])
+
             batch = batch_obs(
                 observations,
                 device=self.device,
@@ -984,6 +1005,7 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps[i,0,0] = 0
                     rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
 
+                    
                     if len(self.config.VIDEO_OPTION) > 0:
                         generate_video(
                             video_option=self.config.VIDEO_OPTION,
@@ -1043,6 +1065,10 @@ class TransformerTrainer(BaseRLTrainer):
                 rgb_frames,
             )
 
+        
+
+        
+        
         num_episodes = len(stats_episodes)
         aggregated_stats = {}
         for stat_key in next(iter(stats_episodes.values())).keys():
