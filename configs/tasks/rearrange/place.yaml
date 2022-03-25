@@ -34,7 +34,7 @@ TASK:
         GOAL_FORMAT: "CARTESIAN"
         DIMENSIONALITY: 3
     OBJECT_SENSOR:
-        TYPE: "ObjectGoalPositionSensor"
+        TYPE: "TargetCurrentSensor"
         GOAL_FORMAT: "CARTESIAN"
         DIMENSIONALITY: 3
     GOAL_SENSOR:
@@ -82,9 +82,9 @@ TASK:
         DIST_REWARD: 20.0
         SUCC_REWARD: 10.0
         PLACE_REWARD: 20.0
-        DROP_PEN: 5.0
+        DROP_PEN: 0.0
         USE_DIFF: True
-        WRONG_DROP_SHOULD_END: True
+        WRONG_DROP_SHOULD_END: False
 
         # General Rearrange Reward config
         CONSTRAINT_VIOLATE_PEN: 10.0
@@ -141,8 +141,8 @@ SIMULATOR:
         WIDTH: 128
         HEIGHT: 128
     HEAD_DEPTH_SENSOR:
-        WIDTH: 32
-        HEIGHT: 32
+        WIDTH: 128
+        HEIGHT: 128
         MIN_DEPTH: 0.0
         MAX_DEPTH: 10.0
         NORMALIZE_DEPTH: True

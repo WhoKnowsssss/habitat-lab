@@ -93,8 +93,8 @@ class PlaceReward(RearrangeReward):
                 reward -= self._config.DROP_PEN
                 if self._config.WRONG_DROP_SHOULD_END:
                     self._task.should_end = True
-                self._metric = reward
-                return
+                    self._metric = reward
+                    return
 
         if self._config.USE_DIFF:
             if self.cur_dist < 0:
