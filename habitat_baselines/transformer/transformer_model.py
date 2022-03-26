@@ -273,8 +273,8 @@ class GPT(nn.Module):
         
 
         if actions is not None and self.model_type == 'reward_conditioned':
-            logits = self.head(x[:, 1::3, :]) # only keep predictions from state_embeddings
-            logits_rwd = self.head_value(x[:, 1::3, :])
+            logits_loc = self.head(x[:, 1::3, :]) # only keep predictions from state_embeddings
+            logits_man = self.head_value(x[:, 1::3, :])
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -287,13 +287,13 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss = F.mse_loss(logits, targets)
-            loss += 0.01 * F.mse_loss(logits_rwd[:-1], rtgs[1:])
+            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:].detach()==0,dim=-1)))
+            loss += F.mse_loss(logits_man, targets[:,:,:8])
 
-        ac = torch.argmax(logits,dim=-1)
+        logits_loc = torch.argmax(logits_loc,dim=-1)
         logits = torch.zeros((*logits.shape[:2], 10),device=logits.device)
-        logits[:,:,:8] = logits_rwd
-        logits[:,:,8] = ac == 1
-        logits[:,:,9] = ac - 1
+        logits[:,:,:8] = logits_man
+        logits[:,:,8] = logits_loc == 1
+        logits[:,:,9] = logits_loc - 1
         logits[:,:,9:][logits[:,:,9:]==2] = 0
         return logits, loss
