@@ -893,6 +893,13 @@ class TransformerTrainer(BaseRLTrainer):
         ):
             current_episodes = self.envs.current_episodes()
 
+
+            batch_list2 = self.gt_observations[max(0,idxxx+1-30):idxxx+1]
+            for k in batch_list2[0].keys():
+                batch_list2[-1][k] = batch_list2[-1][k].to(prev_actions.device).unsqueeze(0)
+                print(torch.sum(torch.abs(batch_list2[-1][k] - batch_list[-1][k])))
+                # batch_list[i]['robot_head_depth'] = batch_list[i]['robot_head_depth']
+            # batch_list = batch_list2
             with torch.no_grad(): 
                 actions = self.transformer_policy.act(
                     batch_list,
@@ -902,8 +909,8 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps=timesteps,
                     valid_context=valid_context,
                 )
-
-            if idxxx < 130:
+            print(actions)
+            if idxxx < 0:
                 pass
                 actions = torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
             else:
@@ -921,7 +928,6 @@ class TransformerTrainer(BaseRLTrainer):
             print(differnce, self.gt_actions[idxxx])
             gt_observations = self.gt_observations[idxxx]
             # print(gt_observations['robot_head_depth'] - observations[0]['robot_head_depth'])
-            differnce = [sum(abs(gt_observations[k] - observations[0][k])) for k in gt_observations.keys()]
             idxxx += 1
             # if timesteps[0,0,0].item() == 49:
             #     print()

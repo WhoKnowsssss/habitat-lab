@@ -56,7 +56,7 @@ RL:
 
 
 
-    return_to_go: 140
+    return_to_go: 7
     
     num_mini_batch: 2
     context_length: 30

@@ -58,6 +58,8 @@ class CausalSelfAttention(nn.Module):
                                      .view(1, 1, config.block_size + 1, config.block_size + 1))
         self.n_head = config.n_head
 
+        self.flag=1
+
     def forward(self, x, layer_past=None):
         B, T, C = x.size()
 
@@ -72,6 +74,17 @@ class CausalSelfAttention(nn.Module):
         # if attention_mask is not None: 
         #     att = att.masked_fill(attention_mask.repeat(T,self.n_head,1,1).transpose(0,2) == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
+        
+        # visualize attention
+        import matplotlib.pyplot as plt
+        if self.flag %1000 == 0:
+            fig, axs = plt.subplots(2,4)
+            for i in range(self.n_head):
+                axs[i//4, i%4].imshow(att[0,i].cpu().numpy(), cmap='hot')
+            fig.savefig('att.png', dpi=1200)
+            plt.close()
+        self.flag += 1
+
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -123,8 +136,9 @@ class GPT(nn.Module):
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
-        self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.head_value = nn.Linear(config.n_embd, 1, bias=False)
+        # self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.head = nn.Linear(config.n_embd, 4, bias=False)
+        self.head_value = nn.Linear(config.n_embd, 8, bias=False)
 
         self.block_size = config.block_size
         self.apply(self._init_weights)
@@ -260,7 +274,7 @@ class GPT(nn.Module):
 
         if actions is not None and self.model_type == 'reward_conditioned':
             logits = self.head(x[:, 1::3, :]) # only keep predictions from state_embeddings
-            # logits_rwd = self.head_value(x[:, 1::3, :])
+            logits_rwd = self.head_value(x[:, 1::3, :])
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -276,4 +290,10 @@ class GPT(nn.Module):
             loss = F.mse_loss(logits, targets)
             loss += 0.01 * F.mse_loss(logits_rwd[:-1], rtgs[1:])
 
+        ac = torch.argmax(logits,dim=-1)
+        logits = torch.zeros((*logits.shape[:2], 10),device=logits.device)
+        logits[:,:,:8] = logits_rwd
+        logits[:,:,8] = ac == 1
+        logits[:,:,9] = ac - 1
+        logits[:,:,9:][logits[:,:,9:]==2] = 0
         return logits, loss
