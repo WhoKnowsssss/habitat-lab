@@ -291,7 +291,7 @@ class GPT(nn.Module):
             loss += F.mse_loss(logits_man, targets[:,:,:8])
 
         logits_loc = torch.argmax(logits_loc,dim=-1)
-        logits = torch.zeros((*logits.shape[:2], 10),device=logits.device)
+        logits = torch.zeros((*logits_loc.shape[:2], 10),device=logits_loc.device)
         logits[:,:,:8] = logits_man
         logits[:,:,8] = logits_loc == 1
         logits[:,:,9] = logits_loc - 1

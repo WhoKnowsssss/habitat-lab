@@ -31,7 +31,7 @@ def read_dataset(
     while len(obss) < config.steps_per_load:
         buffer_num = rng.choice(np.arange(len(filenames)), 1)[0]
 
-        file = os.path.join(path, filenames[buffer_num])
+        file = os.path.join(path, '10.pt') #filenames[buffer_num])
         dataset_raw = torch.load(file, map_location=torch.device('cpu'))
 
         obss += dataset_raw["obs"]
@@ -39,26 +39,14 @@ def read_dataset(
         stepwise_returns = np.concatenate([stepwise_returns, torch.cat(dataset_raw["rewards"]).numpy()])
         done_idxs = np.concatenate([done_idxs, np.argwhere(torch.cat(dataset_raw["masks"]).numpy() == False).squeeze()])
 
-    # logger.info(
-    #     "Success rate: {}.".format(
-
-    #         sum((np.array(rlist) > 100)) / len(rlist)
-    #     )
-    # )
-        
-    # print('max rtg is %d' % max(rtg))
-
-    # -- create timestep dataset
-    # start_index = 0
-    # timesteps = np.zeros(len(actions)+1, dtype=int)
-    # for i in done_idxs:
-    #     i = int(i)
-    #     timesteps[start_index:i+1] = np.arange(i+1 - start_index)
-    #     start_index = i+1
-    # print('max timestep is %d' % max(timesteps))
-
     rtg, timesteps = _timesteps_rtg(done_idxs, stepwise_returns)
 
+    if verbose:
+        logger.info(
+            "In this load, max rtg is {}, max timestep is {}. ".format(
+                rtg.max().round(2), timesteps.max()
+            )
+        )
     return obss, actions, done_idxs, rtg, timesteps
 
 @numba.jit(nopython=True, parallel=True)

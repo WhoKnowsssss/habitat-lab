@@ -37,12 +37,10 @@ class StateActionReturnDataset(Dataset):
 
     def __getitem__(self, idx):
         block_size = self.block_size // 3
-        idx = idx + block_size
         done_idx = idx + block_size
-        for i in self.done_idxs:
-            if i > idx: # first done_idx greater than idx
-                done_idx = min(int(i), done_idx)
-                break
+
+        done_idx = min(np.argmax(self.done_idxs > idx), done_idx)
+
         idx = done_idx - block_size
         states = self.data[idx:done_idx]
         # states = states / 255.
@@ -129,7 +127,7 @@ class RollingDataset(IterableDataset):
 
             rng = np.random.default_rng(self.seed)
             if self.producer is None:
-                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False))
+                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, True))
                 self.producer.start()
             # print(self.producer.is_alive() )
 
@@ -146,8 +144,6 @@ class RollingDataset(IterableDataset):
 
             next(its.islice(self.sampler_iterator, self.id, self.id), None)
             
-
-            # print(f"{self.rank}: BACKKK\n")
             return self
 
         def __next__(self):
@@ -161,7 +157,7 @@ class RollingDataset(IterableDataset):
                 self.dataset_context['num_iterated'] += self.num_iterated_epoch
                 if self.dataset_context['num_iterated'] >= self.steps_to_reload:
                     self.dataset_context['num_iterated'] = 0
-                    for i in range(self.num_workers):
+                    for i in range(self.num_workers+1):
                         self.dataset_context['need_init_{}'.format(i)] = True
                     
                 
