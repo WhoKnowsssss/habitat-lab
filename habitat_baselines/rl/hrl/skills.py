@@ -177,7 +177,7 @@ class NnSkillPolicy(Policy):
             {k: observation_space.spaces[k] for k in expected_obs_keys}
         )
         logger.info(
-            f"Loaded observation space {filtered_obs_space} for skill {config.skill_name}"
+            f"Loaded observation space {filtered_obs_space.spaces.keys()} for skill {config.skill_name}"
         )
 
         filtered_action_space = ActionSpace(

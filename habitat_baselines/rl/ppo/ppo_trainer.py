@@ -1131,11 +1131,7 @@ class PPOTrainer(BaseRLTrainer):
                     # Flush buffer to the final dataset
                     all_obs.extend(
                         [
-                            {
-                                k: v
-                                for k, v in obs.items()
-                                if k in self.config.RL.GYM_OBS_KEYS
-                            }
+                            {k: v for k, v in obs.items()}
                             for obs in buffer_obs[i]
                         ]
                     )
