@@ -3,7 +3,7 @@ ENVIRONMENT:
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/replica_cad/rearrange/v1/{split}/all_receptacles_10k_1k.json.gz
+    DATA_PATH: data/datasets/replica_cad/rearrange/v2/{split}/all_receptacles_10k_1k.json.gz
     SCENES_DIR: "data/replica_cad/"
 TASK:
     TYPE: RearrangeNavToObjTask-v0
@@ -30,11 +30,12 @@ TASK:
     REWARD_MEASUREMENT: "nav_to_obj_reward"
     SUCCESS_MEASUREMENT: "nav_to_obj_success"
 
-    TARGET_START_SENSOR:
-        TYPE: "TargetStartSensor"
-        GOAL_FORMAT: "POLAR"
-        DIMENSIONALITY: 2
-    SENSORS: ["TARGET_START_SENSOR"]
+    TARGET_START_POINT_GOAL_SENSOR:
+        TYPE: "TargetStartPointGoalSensor"
+    JOINT_SENSOR:
+        TYPE: "JointSensor"
+        DIMENSIONALITY: 7
+    SENSORS: ["TARGET_START_POINT_GOAL_SENSOR", "JOINT_SENSOR"]
 
     ROBOT_FORCE:
         TYPE: "RobotForce"

@@ -28,12 +28,6 @@ EVAL:
   USE_CKPT_CONFIG: False
   SHOULD_LOAD_CKPT: False
 
-# IL SAVE OPTIONS
-DATASET_SAVE_PATH: "/srv/share/aszot3/share_demos/nav_pick_03_09/"
-DATASET_SAVE_INTERVAL: 10
-DATASET_SAVE_ENCODER: True
-DATASET_SAVE_VISUAL_ENCODED: False
-
 RL:
   POLICY:
       name: "HierarchicalPolicy"
@@ -95,8 +89,8 @@ RL:
       USE_SKILLS:
         pick: "NN_PICK"
         place: "NN_PLACE"
-        nav: "NN_NAV"
-        nav_to_receptacle: "NN_NAV"
+        nav: "GT_NAV"
+        nav_to_receptacle: "GT_NAV"
 
   REWARD_MEASURE: "composite_reward"
   SUCCESS_MEASURE: "composite_success"
