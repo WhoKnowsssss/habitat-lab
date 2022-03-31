@@ -6,14 +6,26 @@
 
 import copy
 import itertools
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import yaml
 
 from habitat import Config
 from habitat.datasets.rearrange.rearrange_dataset import RearrangeDatasetV0
-from habitat.tasks.rearrange.multi_task.rearrange_pddl import Action, Predicate
+from habitat.tasks.rearrange.multi_task.rearrange_pddl import (
+    Action,
+    Predicate,
+    RearrangeObjectTypes,
+)
 from habitat.tasks.rearrange.rearrange_sim import RearrangeSim
+
+
+@dataclass(frozen=True)
+class EntityToActionsMapping:
+    match_entity_type: Optional[List[RearrangeObjectTypes]]
+    match_id_str: str
+    matching_skills: List[str]
 
 
 class PddlDomain:
@@ -30,6 +42,7 @@ class PddlDomain:
     ):
         with open(load_file_path, "r") as f:
             self.domain_def = yaml.safe_load(f)
+        self._create_action_to_entity_mapping()
 
         self._sim = sim
 
@@ -37,13 +50,38 @@ class PddlDomain:
         for pred_d in self.domain_def["predicates"]:
             pred = Predicate(pred_d)
             self.predicates.append(pred)
-        self.types: List[str] = self.domain_def["types"]
 
         self._config = cur_task_config
 
         self.dataset = dataset
         self.actions = {}
         self.reset()
+
+    @property
+    def action_names(self):
+        return self._action_names
+
+    def _create_action_to_entity_mapping(self):
+        self._match_groups = []
+        for _, group_cfg in self.domain_def[
+            "action_to_entity_mapping"
+        ].items():
+
+            if len(group_cfg["match_entity_type"]) != 0:
+                use_type = [
+                    RearrangeObjectTypes(x)
+                    for x in group_cfg["match_entity_type"]
+                ]
+            else:
+                use_type = None
+
+            self._match_groups.append(
+                EntityToActionsMapping(
+                    match_entity_type=use_type,
+                    match_id_str=group_cfg["match_id_str"],
+                    matching_skills=group_cfg["matching_skills"],
+                )
+            )
 
     def reset(self):
         self._name_to_id = self.get_name_id_conversions(self.domain_def)
@@ -53,19 +91,13 @@ class PddlDomain:
                 self._config,
                 self.dataset,
                 self._name_to_id,
-                self,
                 self.predicate_lookup,
             )
             self.actions[action.name] = action
+        self._action_names = [action_name for action_name in self.actions]
 
-    def get_task_match_for_name(self, task_name_cls: str) -> Action:
-        matches = []
-        for action in self.actions.values():
-            if action.task == task_name_cls:
-                matches.append(action)
-        if len(matches) != 1:
-            raise ValueError("Invalid or too many matches for task name")
-        return matches[0]
+    def get_task_match_for_name(self, task_name: str) -> Action:
+        return self.actions[task_name]
 
     def predicate_lookup(self, pred_key: str) -> Optional[Predicate]:
         """
@@ -82,13 +114,7 @@ class PddlDomain:
 
             if len(pred_args) != len(pred.args):
                 continue
-            is_match = True
-            for q_arg, k_arg in zip(pred_args, pred.args):
-                if k_arg in self.types and q_arg not in self.types:
-                    is_match = False
-                    break
-            if is_match:
-                return pred
+            return copy.deepcopy(pred)
         return None
 
     def is_pred_true(self, bound_pred: Predicate) -> bool:
@@ -103,7 +129,7 @@ class PddlDomain:
         if pred.set_state is not None:
             bound_pred = copy.deepcopy(pred)
             bound_pred.bind(input_args)
-            return self.is_pred_true(bound_pred)
+            return self.is_pred_true(bound_pred), bound_pred
 
         return False
 
@@ -114,17 +140,21 @@ class PddlDomain:
             for entity_input in itertools.combinations(
                 all_entities, pred.get_n_args()
             ):
-                if self.is_pred_true_args(pred, entity_input):
-                    true_preds.append(pred)
+                is_pred_true, bound_pred = self.is_pred_true_args(
+                    pred, entity_input
+                )
+
+                if is_pred_true:
+                    true_preds.append(bound_pred)
         return true_preds
 
     def get_all_entities(self) -> List[str]:
         return list(self._name_to_id.keys())
 
-    def get_name_to_id_mapping(self) -> Dict[str, int]:
+    def get_name_to_id_mapping(self) -> Dict[str, Any]:
         return self._name_to_id
 
-    def get_name_id_conversions(self, domain_def) -> Dict[str, int]:
+    def get_name_id_conversions(self, domain_def) -> Dict[str, Any]:
         """
         Returns a map of constant scene identifiers, such as `kitchen_counter_targets|0`, to the scene ID. If the scene identifier starts with "TARGET_" it is the goal position and refers to an index in the targets array. If it begins with "ART_" it is an articulated object and refers to an index in `self._sim.art_objs`.
         """
@@ -143,4 +173,30 @@ class PddlDomain:
         for i, art_obj in enumerate(self._sim.art_objs):
             name_to_id["ART_" + art_obj.handle] = i
 
+        for k in self._sim.get_all_markers():
+            name_to_id["MARKER_" + k] = k
+
         return name_to_id
+
+    def get_matching_skills(
+        self, entity_type: RearrangeObjectTypes, entity_id: str
+    ) -> List[str]:
+        """
+        Gets the skills that have arguments compatible with an entity
+        """
+        matching_skills = None
+        for match_group in self._match_groups:
+            if (
+                match_group.match_entity_type is not None
+                and entity_type not in match_group.match_entity_type
+            ):
+                continue
+            if not entity_id.startswith(match_group.match_id_str):
+                continue
+
+            if matching_skills is not None:
+                raise ValueError(
+                    f"Multiple matching skills for {entity_type}, {entity_id}"
+                )
+            matching_skills = match_group.matching_skills
+        return matching_skills

@@ -19,7 +19,7 @@ TASK:
     BASE_NOISE: 0.05
     EASY_INIT: false
     TASK_SPEC_BASE_PATH: configs/tasks/rearrange/pddl/
-    TASK_SPEC: nav_pick
+    TASK_SPEC: nav_pick_nav_place
     PDDL_DOMAIN_DEF: configs/tasks/rearrange/pddl/replica_cad_domain.yaml
     OBJ_SUCC_THRESH: 0.3
     ART_SUCC_THRESH: 0.15
@@ -47,8 +47,6 @@ TASK:
         DIMENSIONALITY: 3
     DIST_TO_NAV_GOAL:
         TYPE: DistToNavGoalSensor
-    ROT_DIST_TO_NAV_GOAL:
-        TYPE: NavRotToGoalSensor
     LOCALIZATION_SENSOR:
         TYPE: LocalizationSensor
     JOINT_SENSOR:
@@ -80,7 +78,7 @@ TASK:
     - NAV_GOAL_SENSOR
     EXCESSIVE_FORCE_SHOULD_END:
         TYPE: ForceTerminate
-        MAX_ACCUM_FORCE: 5000.0
+        MAX_ACCUM_FORCE: 50000.0
     ROBOT_FORCE:
         TYPE: RobotForce
         MIN_FORCE: 20.0
@@ -129,7 +127,6 @@ TASK:
         WRONG_PICK_PEN: 5.0
         COLL_PEN: 1.0
         ROBOT_OBJ_COLL_PEN: 0.0
-        MAX_ACCUM_FORCE: 5000.0
         FORCE_PEN: 0.001
         MAX_FORCE_PEN: 1.0
         FORCE_END_PEN: 10.0
@@ -213,6 +210,8 @@ TASK:
     PLACE_SUCCESS:
         TYPE: PlaceSuccess
         SUCC_THRESH: 0.15
+    ROT_DIST_TO_NAV_GOAL:
+        TYPE: NavRotToGoalSensor
 SIMULATOR:
     ACTION_SPACE_CONFIG: v0
     GRASP_IMPULSE: 1000.0

@@ -283,6 +283,8 @@ class RearrangeSim(HabitatSim):
     def set_robot_base_to_random_point(self):
         for _ in range(50):
             start_pos = self.pathfinder.get_random_navigable_point()
+
+            start_pos = self.safe_snap_point(start_pos)
             start_rot = np.random.uniform(0, 2 * np.pi)
 
             self.robot.base_pos = start_pos
@@ -532,6 +534,7 @@ class RearrangeSim(HabitatSim):
         Sets the simulation state from a cached state info dict. See capture_state().
 
           :param set_hold: If true this will set the snapped object from the `state`.
+
           TODO: This should probably be True by default, but I am not sure the effect
           it will have.
         """
