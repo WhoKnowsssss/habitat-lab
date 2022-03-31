@@ -36,7 +36,7 @@ RL:
   SUCCESS_MEASURE: "composite_success"
   SUCCESS_REWARD: 100.0
   SLACK_REWARD: -0.01
-  GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position']
+  GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position', 'nav_goal']
 
   TRAJECTORY_DATASET:
     trajectory_dir: "./data/temp_data"
@@ -56,7 +56,7 @@ RL:
 
 
 
-    return_to_go: 7
+    return_to_go: 130
     
     num_mini_batch: 2
     context_length: 30

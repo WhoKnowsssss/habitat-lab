@@ -138,6 +138,8 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(config.n_embd)
         # self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.head = nn.Linear(config.n_embd, 4, bias=False)
+        self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
+        self.head_3 = nn.Linear(config.n_embd, 1, bias=False) # 4
         self.head_value = nn.Linear(config.n_embd, 8, bias=False)
 
         self.block_size = config.block_size
@@ -274,7 +276,8 @@ class GPT(nn.Module):
 
         if actions is not None and self.model_type == 'reward_conditioned':
             logits_loc = self.head(x[:, 1::3, :]) # only keep predictions from state_embeddings
-            logits_man = self.head_value(x[:, 1::3, :])
+            logits_arm = self.head_2(x[:, 1::3, :])
+            logits_stop = self.head_3(x[:, 1::3, :])
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -287,13 +290,14 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:].detach()==0,dim=-1)))
-            loss += F.mse_loss(logits_man, targets[:,:,:8])
+            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
+            loss += F.mse_loss(logits_arm, targets[:,:,:8])
 
         logits_loc = torch.argmax(logits_loc,dim=-1)
-        logits = torch.zeros((*logits_loc.shape[:2], 10),device=logits_loc.device)
-        logits[:,:,:8] = logits_man
+        logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)
+        logits[:,:,:8] = logits_arm
         logits[:,:,8] = logits_loc == 1
         logits[:,:,9] = logits_loc - 1
-        logits[:,:,9:][logits[:,:,9:]==2] = 0
+        logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
+        logits[:,:,-1] = 0
         return logits, loss

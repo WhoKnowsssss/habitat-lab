@@ -17,29 +17,104 @@ def read_dataset(
     verbose: bool,
     rng: np.random.Generator
 ):        
-    
+    obss = []
+    actions = []
+    done_idxs = []
+    stepwise_returns = []
 
     path = config.trajectory_dir
 
     filenames = os.listdir(path)
 
-    obss = []
-    actions = None
-    done_idxs = np.array([], dtype=np.int64)
-    stepwise_returns = np.array([])
+    if verbose:
+        logger.info(
+            "Trajectory Files: {}".format(
+                filenames
+            )
+        )
 
-    while len(obss) < config.steps_per_load:
-        buffer_num = rng.choice(np.arange(len(filenames)), 1)[0]
+    transitions_per_buffer = np.zeros(len(filenames), dtype=int)
+    num_trajectories = 0
+    previous_done = 0
+    while len(obss) < config.files_per_load:
+        buffer_num = rng.choice(np.arange(len(filenames)), 1, replace=False)[0]
+        i = transitions_per_buffer[buffer_num]
+        if verbose:
+            logger.info(
+                "Loading from buffer {}".format(
+                    buffer_num, i
+                )
+            )
+        file = os.path.join(path, filenames[buffer_num])
+        if os.path.exists(file):
+            dataset_raw = torch.load(file, map_location=torch.device('cpu'))
 
-        file = os.path.join(path, '10.pt') #filenames[buffer_num])
-        dataset_raw = torch.load(file, map_location=torch.device('cpu'))
+            if len(dataset_raw["obs"]) == len(dataset_raw["actions"]):
+                temp_obs = np.array(dataset_raw["obs"])
+            else:
+                temp_obs = np.array(dataset_raw["obs"][:-1])
+            temp_actions = torch.stack(dataset_raw["actions"]).numpy()
+            temp_stepwise_returns = torch.cat(dataset_raw["rewards"]).numpy()
+            temp_dones = torch.cat(dataset_raw["masks"]).numpy()
+            temp_done_idxs = np.argwhere(torch.cat(dataset_raw["masks"]).numpy() == False).squeeze()
 
-        obss += dataset_raw["obs"]
-        actions = np.concatenate([actions, torch.stack(dataset_raw["actions"]).numpy()]) if actions is not None else torch.stack(dataset_raw["actions"]).numpy()
-        stepwise_returns = np.concatenate([stepwise_returns, torch.cat(dataset_raw["rewards"]).numpy()])
-        done_idxs = np.concatenate([done_idxs, np.argwhere(torch.cat(dataset_raw["masks"]).numpy() == False).squeeze()])
+            idx = np.nonzero(temp_done_idxs[1:] - temp_done_idxs[:-1] < 30)[0]
+            if len(idx) > 0:
+                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[:-1][i]+1 , temp_done_idxs[1:][i]+1) for i in idx])
 
-    rtg, timesteps = _timesteps_rtg(done_idxs, stepwise_returns)
+                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+
+            temp_done_idxs = np.argwhere(temp_dones == False).squeeze()
+            l = temp_done_idxs[1:] - temp_done_idxs[:-1]
+            # debug
+            assert all(l <= 400), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
+            assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
+            # print(f"file:  {file}  dn:  {temp_done_idxs}")
+
+            obss += [temp_obs]
+            actions += [temp_actions]
+            done_idxs += [temp_done_idxs + previous_done]
+            previous_done += len(temp_actions)
+            stepwise_returns += [temp_stepwise_returns]
+    
+    actions = np.concatenate(actions)
+    obss = np.concatenate(obss).tolist()
+    stepwise_returns = np.concatenate(stepwise_returns)
+    done_idxs = np.concatenate(done_idxs)
+
+    # -- create reward-to-go dataset
+    start_index = 0
+    rlist = []
+    rtg = np.zeros_like(stepwise_returns)
+    for i in done_idxs:
+        i = int(i)
+        curr_traj_returns = stepwise_returns[start_index:i]
+        for j in range(i-1, start_index-1, -1): # start from i-1
+            rtg_j = curr_traj_returns[j-start_index:i-start_index]
+            rtg[j] = sum(rtg_j)
+        
+        rlist.append(sum(curr_traj_returns))
+        start_index = i
+
+    # logger.info(
+    #     "Success rate: {}.".format(
+
+    #         sum((np.array(rlist) > 100)) / len(rlist)
+    #     )
+    # )
+        
+    # print('max rtg is %d' % max(rtg))
+    # -- create timestep dataset
+    start_index = 0
+    timesteps = np.zeros(len(actions)+1, dtype=int)
+    for i in done_idxs:
+        i = int(i)
+        timesteps[start_index:i+1] = np.arange(i+1 - start_index)
+        start_index = i+1
+    # print('max timestep is %d' % max(timesteps))
 
     if verbose:
         logger.info(
@@ -47,6 +122,8 @@ def read_dataset(
                 rtg.max().round(2), timesteps.max()
             )
         )
+
+
     return obss, actions, done_idxs, rtg, timesteps
 
 @numba.jit(nopython=True, parallel=True)

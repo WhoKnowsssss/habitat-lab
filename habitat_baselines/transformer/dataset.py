@@ -36,16 +36,25 @@ class StateActionReturnDataset(Dataset):
         return len(self.data) - self.block_size
 
     def __getitem__(self, idx):
-        block_size = self.block_size // 3
-        done_idx = idx + block_size
+                block_size = self.block_size // 3
+        # idx = idx + block_size
 
-        done_idx = min(np.argmax(self.done_idxs > idx), done_idx)
-
+        done_idx = min(self.done_idxs[np.nonzero(self.done_idxs > idx)[0][0]], idx + block_size)
+        # for i in self.done_idxs:
+        #     if i > idx: # first done_idx greater than idx
+        #         done_idx = min(int(i), done_idx)
+        #         break
         idx = done_idx - block_size
-        states = self.data[idx:done_idx]
         # states = states / 255.
-        assert (idx >= 0), "Error on indexing"
+        
+        try:
+            assert (idx >= 0), f"\n\n\n\ERROR on indexing, idx: {idx}, done_idx: {done_idx}, {self.done_idxs}"
+        except AssertionError as e:
+            print(e)
+            idx, done_idx = 0, block_size
+        states = self.data[idx:done_idx]
         assert (len(states) == 30), "Error on states length"
+        
         actions = torch.tensor(self.actions[idx:done_idx], dtype=torch.float32).unsqueeze(1) # (block_size, 1)
         rtgs = torch.tensor(self.rtgs[idx:done_idx], dtype=torch.float32).unsqueeze(1)
         timesteps = torch.tensor(self.timesteps[idx:idx+1], dtype=torch.int64).unsqueeze(1)
