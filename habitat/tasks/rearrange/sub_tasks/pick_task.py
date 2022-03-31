@@ -12,8 +12,12 @@ import numpy as np
 
 from habitat.core.dataset import Episode
 from habitat.core.registry import registry
-from habitat.tasks.rearrange.rearrange_task import RearrangeTask
-from habitat.tasks.rearrange.utils import CacheHelper, rearrange_collision
+from habitat.tasks.rearrange.rearrange_task import ADD_CACHE_KEY, RearrangeTask
+from habitat.tasks.rearrange.utils import (
+    CacheHelper,
+    logger,
+    rearrange_collision,
+)
 from habitat.tasks.utils import get_angle
 
 
@@ -38,13 +42,12 @@ class RearrangePickTaskV1(RearrangeTask):
         self.start_states = self.cache.load()
         self.prev_colls = None
         self.force_set_idx = None
-
-    @property
-    def target_idx(self) -> int:
-        return self._targ_idx
+        self._add_cache_key: str = ""
 
     def set_args(self, obj, **kwargs):
         self.force_set_idx = obj
+        if ADD_CACHE_KEY in kwargs:
+            self._add_cache_key = kwargs[ADD_CACHE_KEY]
 
     def _get_targ_pos(self, sim):
         scene_pos = sim.get_scene_pos()
@@ -59,6 +62,13 @@ class RearrangePickTaskV1(RearrangeTask):
         else:
             sel_idx = np.random.randint(0, len(self._get_targ_pos(sim)))
         return sel_idx
+
+    @property
+    def _is_there_spawn_noise(self):
+        return (
+            self._config.BASE_NOISE != 0.0
+            or self._config.BASE_ANGLE_NOISE != 0
+        )
 
     def _gen_start_pos(
         self, sim, is_easy_init, episode, sel_idx, force_snap_pos=None
@@ -87,6 +97,7 @@ class RearrangePickTaskV1(RearrangeTask):
         else:
             timeout = 1000
         attempt = 0
+        is_within_bounds = True
 
         # Add noise to the base position and angle for a collision free
         # starting position
@@ -99,6 +110,10 @@ class RearrangePickTaskV1(RearrangeTask):
             angle_to_obj = get_angle(forward[[0, 2]], rel_targ[[0, 2]])
             if np.cross(forward[[0, 2]], rel_targ[[0, 2]]) > 0:
                 angle_to_obj *= -1.0
+
+            if not self._is_there_spawn_noise:
+                logger.info("No spawn noise, returning first found position")
+                break
 
             targ_dist = np.linalg.norm((start_pos - orig_start_pos)[[0, 2]])
 
@@ -190,16 +205,25 @@ class RearrangePickTaskV1(RearrangeTask):
         super().reset(episode)
 
         self.prev_colls = 0
-        episode_id = sim.ep_info["episode_id"]
+        cache_lookup_k = sim.ep_info["episode_id"]
+        cache_lookup_k += self._add_cache_key
+
+        if self.force_set_idx is not None:
+            cache_lookup_k += str(self.force_set_idx)
+        logger.info(
+            f"Using cache key {cache_lookup_k}, force_regenerate={self._config.FORCE_REGENERATE}"
+        )
 
         if (
-            episode_id in self.start_states
+            cache_lookup_k in self.start_states
             and not self._config.FORCE_REGENERATE
         ):
-            start_pos, start_rot, sel_idx = self.start_states[episode_id]
+            start_pos, start_rot, sel_idx = self.start_states[cache_lookup_k]
         else:
             mgr = sim.get_articulated_object_manager()
             sel_idx = self._sample_idx(sim)
+
+            logger.info(f"Generating init for {self}")
 
             receptacle_handle, receptacle_link_idx = self.get_receptacle_info(
                 episode, sel_idx
@@ -237,7 +261,8 @@ class RearrangePickTaskV1(RearrangeTask):
             start_pos, start_rot = self._gen_start_pos(
                 sim, self._config.EASY_INIT, episode, sel_idx, start_pos
             )
-            self.start_states[episode_id] = (start_pos, start_rot, sel_idx)
+            logger.info(f"Finished creating init for {self}")
+            self.start_states[cache_lookup_k] = (start_pos, start_rot, sel_idx)
             self.cache.save(self.start_states)
 
         sim.robot.base_pos = start_pos

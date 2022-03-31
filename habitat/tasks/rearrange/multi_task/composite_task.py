@@ -18,10 +18,12 @@ from habitat.tasks.rearrange.multi_task.pddl_domain import PddlDomain
 from habitat.tasks.rearrange.multi_task.rearrange_pddl import (
     Action,
     Predicate,
+    RearrangeObjectTypes,
     SetState,
     parse_func,
 )
 from habitat.tasks.rearrange.rearrange_task import RearrangeTask
+from habitat.tasks.rearrange.utils import logger
 
 
 @registry.register_task(name="RearrangeCompositeTask-v0")
@@ -118,7 +120,8 @@ class CompositeTask(RearrangeTask):
                 break
             name, args = parse_func(action)
             args = args.split(",")
-            ac_instance = copy.deepcopy(self.domain.actions[name])
+
+            ac_instance = self.domain.actions[name].copy_new()
 
             ac_instance.bind(
                 args, self.task_def.get("add_args", {}).get(i, {})
@@ -133,6 +136,8 @@ class CompositeTask(RearrangeTask):
         Sequentially applies all solution actions before `node_idx`. But NOT
         including the solution action at index `node_idx`.
         """
+
+        logger.info("Jumping to node {node_idx}, is_full_task={is_full_task}")
         # We don't want to reset to this node if we are in full task mode.
         if not is_full_task:
             self._cur_node = node_idx
@@ -187,7 +192,7 @@ class CompositeTask(RearrangeTask):
         self._inferred_cur_task = None
         self._increment_solution_subtask(episode)
         self.cached_tasks = {}
-        return super().reset(episode)
+        return self._get_observations(episode)
 
     def get_inferred_node_idx(self) -> int:
         return self._inferred_cur_node_idx
@@ -276,6 +281,16 @@ class CompositeTask(RearrangeTask):
     @property
     def targ_idx(self):
         return self._try_get_subtask_prop("targ_idx", self._targ_idx)
+
+    @property
+    def nav_to_task_name(self):
+        return self._try_get_subtask_prop("nav_to_task_name", None)
+
+    @property
+    def nav_to_obj_type(self) -> RearrangeObjectTypes:
+        return self._try_get_subtask_prop(
+            "nav_to_obj_type", RearrangeObjectTypes.RIGID_OBJECT
+        )
 
     @property
     def nav_target_pos(self):
