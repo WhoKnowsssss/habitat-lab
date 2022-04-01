@@ -1,9 +1,9 @@
 ENVIRONMENT:
-    MAX_EPISODE_STEPS: 500
+    MAX_EPISODE_STEPS: 400
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/replica_cad/rearrange/v1/{split}/all_receptacles_10k_1k.json.gz
+    DATA_PATH: data/datasets/replica_cad/rearrange/v1/eval/all_receptacles_10k_1k.json.gz
     SCENES_DIR: data/replica_cad/
 TASK:
     TYPE: RearrangeCompositeTask-v0
@@ -80,7 +80,7 @@ TASK:
     - NAV_GOAL_SENSOR
     EXCESSIVE_FORCE_SHOULD_END:
         TYPE: ForceTerminate
-        MAX_ACCUM_FORCE: 5000.0
+        MAX_ACCUM_FORCE: -1.0
     ROBOT_FORCE:
         TYPE: RobotForce
         MIN_FORCE: 20.0

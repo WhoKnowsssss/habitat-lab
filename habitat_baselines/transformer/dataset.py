@@ -36,7 +36,7 @@ class StateActionReturnDataset(Dataset):
         return len(self.data) - self.block_size
 
     def __getitem__(self, idx):
-                block_size = self.block_size // 3
+        block_size = self.block_size // 3
         # idx = idx + block_size
 
         done_idx = min(self.done_idxs[np.nonzero(self.done_idxs > idx)[0][0]], idx + block_size)
