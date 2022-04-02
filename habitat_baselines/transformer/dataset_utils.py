@@ -17,7 +17,6 @@ def read_dataset(
 ):        
     obss = []
     actions = []
-    returns = [0]
     done_idxs = []
     stepwise_returns = []
 
@@ -34,67 +33,55 @@ def read_dataset(
 
     transitions_per_buffer = np.zeros(len(filenames), dtype=int)
     num_trajectories = 0
-    while len(obss) < config.steps_per_load:
-        buffer_num = rng.choice(np.arange(len(filenames)), 1)[0]
+    previous_done = 0
+    while len(obss) < config.files_per_load:
+        buffer_num = rng.choice(np.arange(len(filenames)), 1, replace=False)[0]
         i = transitions_per_buffer[buffer_num]
         if verbose:
             logger.info(
-                "Loading from buffer {} which has {} already loaded".format(
+                "Loading from buffer {}".format(
                     buffer_num, i
                 )
             )
         file = os.path.join(path, filenames[buffer_num])
         if os.path.exists(file):
             dataset_raw = torch.load(file, map_location=torch.device('cpu'))
-            done = False
-            curr_num_transitions = len(obss)
-            trajectories_to_load = config.trajs_per_file
-            buffer_index = rng.integers(0, len(dataset_raw["actions"]))
-            while not done:
-                # states, ac, ret, next_states, next_action, next_reward, terminal, indices = frb.sample_transition_batch(batch_size=1, indices=[i])
-                states, ac, ret, terminal = {k:dataset_raw["obs"][buffer_index][k] for k in dataset_raw["obs"][0].keys()}, dataset_raw["actions"][buffer_index].numpy(), [dataset_raw["rewards"][buffer_index].numpy()], [not dataset_raw["masks"][buffer_index].numpy()]
-                # states = states.transpose((0, 3, 1, 2))[0] # (1, 84, 84, 4) --> (4, 84, 84)
-                obss += [states]
-                actions += [ac] if ac.shape[0] > 1 else [ac[0]]
-                stepwise_returns += [ret[0]]
-                buffer_index += 1
-                if terminal[0] == 1:
-                    done_idxs += [len(obss)]
-                    curr_num_transitions = done_idxs[-1]
 
-                    returns += [0]
-                    if trajectories_to_load == 0:
-                        done = True
-                    else:
-                        trajectories_to_load -= 1
-                        buffer_index = rng.integers(0, len(dataset_raw["actions"]))
-                returns[-1] += ret[0]
-                i += 1
-                
-                if i >= 110000:
-                    obss = obss[:curr_num_transitions]
-                    actions = actions[:curr_num_transitions]
-                    stepwise_returns = stepwise_returns[:curr_num_transitions]
-                    returns[-1] = 0
-                    i = curr_num_transitions
-                    done = True
-            num_trajectories += (config.trajs_per_file - trajectories_to_load)
-            transitions_per_buffer[buffer_num] = i
-        if verbose:
-            logger.info(
-                "This buffer has {} loaded transitions and there are now {} transitions total divided into {} trajectories. ".format(
-                    i, len(obss), num_trajectories
-                )
-            )
+            if len(dataset_raw["obs"]) == len(dataset_raw["actions"]):
+                temp_obs = np.array(dataset_raw["obs"])
+            else:
+                temp_obs = np.array(dataset_raw["obs"][:-1])
+            temp_actions = torch.stack(dataset_raw["actions"]).numpy()
+            temp_stepwise_returns = torch.cat(dataset_raw["rewards"]).numpy()
+            temp_dones = torch.cat(dataset_raw["masks"]).numpy()
+            temp_done_idxs = np.argwhere(torch.cat(dataset_raw["masks"]).numpy() == False).squeeze()
 
-        # debug
-        l = np.array(done_idxs[1:]) - np.array(done_idxs[:-1])
-        assert all(l <= 200), f"file:  {file}  dn:  {done_idxs}"
+            idx = np.nonzero(temp_done_idxs[1:] - temp_done_idxs[:-1] < 30)[0]
+            if len(idx) > 0:
+                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[:-1][i]+1 , temp_done_idxs[1:][i]+1) for i in idx])
 
-    actions = np.array(actions)
-    returns = np.array(returns, dtype=np.float32)
-    stepwise_returns = np.array(stepwise_returns)
-    done_idxs = np.array(done_idxs)
+                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+
+            temp_done_idxs = np.argwhere(temp_dones == False).squeeze()
+            l = temp_done_idxs[1:] - temp_done_idxs[:-1]
+            # debug
+            assert all(l <= 400), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
+            assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
+            # print(f"file:  {file}  dn:  {temp_done_idxs}")
+
+            obss += [temp_obs]
+            actions += [temp_actions]
+            done_idxs += [temp_done_idxs + previous_done]
+            previous_done += len(temp_actions)
+            stepwise_returns += [temp_stepwise_returns]
+    
+    actions = np.concatenate(actions)
+    obss = np.concatenate(obss).tolist()
+    stepwise_returns = np.concatenate(stepwise_returns)
+    done_idxs = np.concatenate(done_idxs)
 
     # -- create reward-to-go dataset
     start_index = 0
@@ -118,7 +105,6 @@ def read_dataset(
     # )
         
     # print('max rtg is %d' % max(rtg))
-
     # -- create timestep dataset
     start_index = 0
     timesteps = np.zeros(len(actions)+1, dtype=int)
@@ -147,6 +133,6 @@ def producer(
     while True:
         if len(deque) < 2:
             deque.append(read_dataset(config, verbose, rng))
-            time.sleep(2)
+            time.sleep(3)
         else:
             time.sleep(10)

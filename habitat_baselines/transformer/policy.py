@@ -284,7 +284,7 @@ class TransformerResnetNet(Net):
             rnn_input_size += hidden_size
 
         self._hidden_size = hidden_size
-
+        
         self.visual_encoder = ResNetEncoder(
             observation_space if not force_blind_policy else spaces.Dict({}),
             baseplanes=resnet_baseplanes,
@@ -297,11 +297,11 @@ class TransformerResnetNet(Net):
             self.visual_fc = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(
-                    np.prod(self.visual_encoder.output_shape), hidden_size//2
+                    np.prod(self.visual_encoder.output_shape), hidden_size
                 ),
                 nn.ReLU(True),
             )
-        mconf = GPTConfig(num_actions, context_length*3, num_states=[(0 if self.is_blind else self._hidden_size//2), rnn_input_size],
+        mconf = GPTConfig(num_actions, context_length, num_states=[(0 if self.is_blind else self._hidden_size//2), rnn_input_size],
                   n_layer=n_layer, n_head=n_head, n_embd=self._hidden_size, model_type=model_type, max_timestep=max_episode_step) # 6,8
         self.state_encoder = GPT(mconf)
 
@@ -448,7 +448,7 @@ class TransformerResnetNet(Net):
             prev_actions_ = torch.clone(prev_actions)
             for i in range(current_context.shape[0]):
                 rtgs_[i,:,:] = torch.cat((rtgs_[i,-current_context[i]:,:],torch.zeros_like(rtgs_[i,:-current_context[i],:])), dim=-2)
-                prev_actions_[i,:,:] = torch.cat((prev_actions_[i,-current_context[i]+1:,:],torch.zeros_like(prev_actions_[i,:-current_context[i]+1,:])), dim=-2)
+                prev_actions_[i,:,:] = torch.cat((prev_actions_[i,-current_context[i]:,:],torch.zeros_like(prev_actions_[i,:-current_context[i],:])), dim=-2)
                 outs[i,:,:] = torch.cat((outs[i,-current_context[i]:,:],torch.zeros_like(outs[i,:-current_context[i],:])), dim=-2)
             logits, loss = self.state_encoder(outs, prev_actions_, targets=targets, rtgs=rtgs_, timesteps=timesteps)
         else:

@@ -37,17 +37,24 @@ class StateActionReturnDataset(Dataset):
 
     def __getitem__(self, idx):
         block_size = self.block_size // 3
-        idx = idx + block_size
-        done_idx = idx + block_size
-        for i in self.done_idxs:
-            if i > idx: # first done_idx greater than idx
-                done_idx = min(int(i), done_idx)
-                break
+        # idx = idx + block_size
+
+        done_idx = min(self.done_idxs[np.nonzero(self.done_idxs > idx)[0][0]], idx + block_size)
+        # for i in self.done_idxs:
+        #     if i > idx: # first done_idx greater than idx
+        #         done_idx = min(int(i), done_idx)
+        #         break
         idx = done_idx - block_size
-        states = self.data[idx:done_idx]
         # states = states / 255.
-        assert (idx >= 0), "Error on indexing"
+        
+        try:
+            assert (idx >= 0), f"\n\n\n\ERROR on indexing, idx: {idx}, done_idx: {done_idx}, {self.done_idxs}"
+        except AssertionError as e:
+            print(e)
+            idx, done_idx = 0, block_size
+        states = self.data[idx:done_idx]
         assert (len(states) == 30), "Error on states length"
+        
         actions = torch.tensor(self.actions[idx:done_idx], dtype=torch.float32).unsqueeze(1) # (block_size, 1)
         rtgs = torch.tensor(self.rtgs[idx:done_idx], dtype=torch.float32).unsqueeze(1)
         timesteps = torch.tensor(self.timesteps[idx:idx+1], dtype=torch.int64).unsqueeze(1)
@@ -119,7 +126,7 @@ class RollingDataset(IterableDataset):
             if self._is_distributed:
                 self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=(self.seed + self.seed_epoch), drop_last=True)
             else:
-                self.sampler = SequentialSampler(self.dataset) # RandomSampler
+                self.sampler = RandomSampler(self.dataset) # RandomSampler
 
         def __iter__(self):
             self.num_iterated_epoch = 0
@@ -130,25 +137,23 @@ class RollingDataset(IterableDataset):
 
             rng = np.random.default_rng(self.seed)
             if self.producer is None:
-                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False))
+                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, True))
                 self.producer.start()
             # print(self.producer.is_alive() )
 
-            if 'need_init_{}'.format(self.id) not in self.dataset_context:
-                self.dataset_context['need_init_{}'.format(self.id)] = True
+            # if 'need_init_{}'.format(self.id) not in self.dataset_context:
+            #     self.dataset_context['need_init_{}'.format(self.id)] = True
 
             # print(f"rank: {self.rank}, {self.dataset_context['need_init_{}'.format(self.id)]}, {len(self.queue)}")
 
-            if self.dataset_context['need_init_{}'.format(self.id)]:
-                self.init_dataset()
-                self.dataset_context['need_init_{}'.format(self.id)] = False
+            # if self.dataset_context['need_init_{}'.format(self.id)]:
+            self.init_dataset()
+                # self.dataset_context['need_init_{}'.format(self.id)] = False
 
             self.sampler_iterator = iter(self.sampler)
 
             next(its.islice(self.sampler_iterator, self.id, self.id), None)
             
-
-            # print(f"{self.rank}: BACKKK\n")
             return self
 
         def __next__(self):
@@ -159,16 +164,19 @@ class RollingDataset(IterableDataset):
                 idx = next(self.sampler_iterator)
             except StopIteration:
                 
-                self.dataset_context['num_iterated'] += self.num_iterated_epoch
-                if self.dataset_context['num_iterated'] >= self.steps_to_reload:
-                    self.dataset_context['num_iterated'] = 0
-                    for i in range(self.num_workers):
-                        self.dataset_context['need_init_{}'.format(i)] = True
+                # self.dataset_context['num_iterated'] += self.num_iterated_epoch
+                # if self.dataset_context['num_iterated'] >= self.steps_to_reload:
+                #     self.dataset_context['num_iterated'] = 0
+                #     for i in range(self.num_workers+1):
+                #         self.dataset_context['need_init_{}'.format(i)] = True
                     
                 
                 raise StopIteration
 
+
+
             item = self.dataset.__getitem__(idx)
+
             next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
             return item
 

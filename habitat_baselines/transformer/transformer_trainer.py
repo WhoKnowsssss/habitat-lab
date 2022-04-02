@@ -274,6 +274,7 @@ class TransformerTrainer(BaseRLTrainer):
             torch.distributed.barrier()
 
         # self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
+        mp.set_sharing_strategy('file_system')
         manager = mp.Manager()
         self.dataset_context = manager.dict()
         self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, 
@@ -640,7 +641,15 @@ class TransformerTrainer(BaseRLTrainer):
 
         resume_state = load_resume_state(self.config)
         if resume_state is not None:
-            self.transformer_policy.load_state_dict(resume_state["state_dict"])
+            prefix = ""
+            self.transformer_policy.load_state_dict(
+                {
+                    k[k.find(prefix) + len(prefix) :]: v
+                    for k, v in resume_state["state_dict"].items()
+                    if prefix in k
+                }
+            )
+            # self.transformer_policy.load_state_dict(resume_state["state_dict"])
             self.optimizer.load_state_dict(resume_state["optim_state"])
             lr_scheduler_after.load_state_dict(resume_state["lr_sched_state"])
             lr_scheduler.total_epoch = 0
