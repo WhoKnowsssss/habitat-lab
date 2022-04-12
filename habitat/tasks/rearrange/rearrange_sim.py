@@ -25,6 +25,7 @@ from habitat.tasks.rearrange.utils import (
     IkHelper,
     get_aabb,
     is_pb_installed,
+    logger,
     make_render_only,
     rearrange_collision,
 )
@@ -43,12 +44,6 @@ class RearrangeSim(HabitatSim):
         agent_config = self.habitat_config
 
         agent_cfg = self._get_agent_config()
-
-        self.navmesh_settings = NavMeshSettings()
-        self.navmesh_settings.set_defaults()
-        self.navmesh_settings.agent_radius = agent_cfg.RADIUS
-        self.navmesh_settings.agent_height = agent_cfg.HEIGHT
-        self.navmesh_settings.agent_max_climb = 0.15
 
         self.first_setup = True
         self.ep_info: Optional[Config] = None
@@ -247,7 +242,7 @@ class RearrangeSim(HabitatSim):
             self.sleep_all_objects()
 
         if new_scene:
-            self._recompute_navmesh()
+            self._load_navmesh()
 
         # Get the starting positions of the target objects.
         rom = self.get_rigid_object_manager()
@@ -277,7 +272,8 @@ class RearrangeSim(HabitatSim):
             }
 
     def set_robot_base_to_random_point(self):
-        for _ in range(50):
+        MAX_ATTEMPTS = 50
+        for attempt_i in range(MAX_ATTEMPTS):
             start_pos = self.pathfinder.get_random_navigable_point()
 
             start_pos = self.safe_snap_point(start_pos)
@@ -285,8 +281,7 @@ class RearrangeSim(HabitatSim):
 
             self.robot.base_pos = start_pos
             self.robot.base_rot = start_rot
-
-            self.internal_step(-1)
+            self.perform_discrete_collision_detection()
             did_collide, details = rearrange_collision(
                 self,
                 True,
@@ -294,6 +289,10 @@ class RearrangeSim(HabitatSim):
             )
             if not did_collide:
                 break
+        if attempt_i == MAX_ATTEMPTS - 1:
+            logger.warning(
+                f"Could not find a collision free start for {self.ep_info['episode_id']}"
+            )
 
     def _setup_targets(self):
         self._targets = {}
@@ -302,7 +301,7 @@ class RearrangeSim(HabitatSim):
                 [[transform[j][i] for j in range(4)] for i in range(4)]
             )
 
-    def _recompute_navmesh(self):
+    def _load_navmesh(self):
         scene_name = self.ep_info["scene_id"].split("/")[-1].split(".")[0]
         base_dir = osp.join(*self.ep_info["scene_id"].split("/")[:2])
 
@@ -567,7 +566,8 @@ class RearrangeSim(HabitatSim):
     def step(self, action: Union[str, int]) -> Observations:
         rom = self.get_rigid_object_manager()
 
-        self._update_markers()
+        if self.habitat_config.NEEDS_MARKERS:
+            self._update_markers()
 
         if self.habitat_config.DEBUG_RENDER:
             rom = self.get_rigid_object_manager()
@@ -597,20 +597,20 @@ class RearrangeSim(HabitatSim):
             self.viz_ids = defaultdict(lambda: None)
 
         self.grasp_mgr.update()
+        if self.robot is not None and self.habitat_config.UPDATE_ROBOT:
+            self.robot.update()
 
         if self.habitat_config.CONCUR_RENDER:
             self._prev_sim_obs = self.start_async_render()
 
             for _ in range(self.ac_freq_ratio):
-                self.internal_step(-1)
-            # self.internal_step(0.008 * self.ac_freq_ratio)
+                self.internal_step(-1, update_robot=False)
 
             self._prev_sim_obs = self.get_sensor_observations_async_finish()
             obs = self._sensor_suite.get_observations(self._prev_sim_obs)
         else:
             for _ in range(self.ac_freq_ratio):
-                self.internal_step(-1)
-            # self.internal_step(0.008 * self.ac_freq_ratio)
+                self.internal_step(-1, update_robot=False)
             self._prev_sim_obs = self.get_sensor_observations()
             obs = self._sensor_suite.get_observations(self._prev_sim_obs)
 
@@ -668,7 +668,9 @@ class RearrangeSim(HabitatSim):
         viz_obj.translation = mn.Vector3(*position)
         return viz_obj.object_id
 
-    def internal_step(self, dt: Union[int, float]) -> None:
+    def internal_step(
+        self, dt: Union[int, float], update_robot: bool = True
+    ) -> None:
         """Step the world and update the robot.
 
         :param dt: Timestep by which to advance the world. Multiple physics substeps can be excecuted within a single timestep. -1 indicates a single physics substep.
@@ -679,8 +681,10 @@ class RearrangeSim(HabitatSim):
         # optionally step physics and update the robot for benchmarking purposes
         if self.habitat_config.get("STEP_PHYSICS", True):
             self.step_world(dt)
-            if self.robot is not None and self.habitat_config.get(
-                "UPDATE_ROBOT", True
+            if (
+                update_robot
+                and self.robot is not None
+                and self.habitat_config.UPDATE_ROBOT
             ):
                 self.robot.update()
 
@@ -705,7 +709,7 @@ class RearrangeSim(HabitatSim):
 
     def get_target_objs_start(self) -> np.ndarray:
         """Get the initial positions of all objects targeted for rearrangement as a numpy array."""
-        return np.array(self.target_start_pos)
+        return self.target_start_pos
 
     def get_scene_pos(self) -> np.ndarray:
         """Get the positions of all clutter RigidObjects in the scene as a numpy array."""

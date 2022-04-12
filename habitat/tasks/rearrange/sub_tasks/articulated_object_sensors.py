@@ -202,8 +202,6 @@ class ArtObjSuccess(Measure):
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
-        dist = task.success_js_state - task.get_use_marker().get_targ_js()
-
         ee_to_rest_distance = task.measurements.measures[
             EndEffectorToRestDistance.cls_uuid
         ].get_metric()
@@ -325,7 +323,8 @@ class ArtObjReward(RearrangeReward):
 
         # Dense reward to the target articulated object state.
         dist_diff = prev_dist - cur_dist
-        reward += self._config.ART_DIST_REWARD * dist_diff
+        if not is_art_obj_state_succ:
+            reward += self._config.ART_DIST_REWARD * dist_diff
 
         cur_has_grasped = task._sim.grasp_mgr.is_grasped
 

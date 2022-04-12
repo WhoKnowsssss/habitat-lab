@@ -29,11 +29,10 @@ from habitat.datasets.rearrange.receptacle import (
 )
 from habitat.sims.habitat_simulator.debug_visualizer import DebugVisualizer
 from habitat.utils.common import cull_string_list_by_substrings
-from habitat_sim.nav import NavMeshSettings
 
 
-def get_sample_region_ratios(load_dict):
-    sample_region_ratios = defaultdict(lambda: 1.0)
+def get_sample_region_ratios(load_dict) -> Dict[str, float]:
+    sample_region_ratios: Dict[str, float] = defaultdict(lambda: 1.0)
     sample_region_ratios.update(
         load_dict["params"].get("sample_region_ratio", {})
     )
@@ -429,23 +428,6 @@ class RearrangeEpisodeGenerator:
 
         return generated_episodes
 
-    def _get_target_numbers(self):
-        target_numbers = {}
-        for target_sampler_info in self.cfg.object_target_samplers:
-            num_objects = (
-                target_sampler_info["params"]["num_samples"][0],
-                target_sampler_info["params"]["num_samples"][1],
-            )
-            target_number = (
-                random.randrange(num_objects[0], num_objects[1])
-                if num_objects[1] > num_objects[0]
-                else num_objects[0]
-            )
-            sampler_name = target_sampler_info["name"]
-            target_numbers[sampler_name] = target_number
-
-        return target_numbers
-
     def generate_single_episode(self) -> Optional[RearrangeEpisode]:
         """
         Generate a single episode, sampling the scene.
@@ -458,16 +440,13 @@ class RearrangeEpisodeGenerator:
         }
 
         ep_scene_handle = self.generate_scene()
-        self.navmesh_settings = NavMeshSettings()
-        self.navmesh_settings.set_defaults()
-        self.navmesh_settings.agent_radius = 0.3
-        self.navmesh_settings.agent_height = 1.5
-        self.navmesh_settings.agent_max_climb = 0.05
-        self.sim.recompute_navmesh(
-            self.sim.pathfinder,
-            self.navmesh_settings,
-            include_static_objects=True,
+        scene_base_dir = osp.dirname(osp.dirname(ep_scene_handle))
+
+        scene_name = ep_scene_handle.split(".")[0]
+        navmesh_path = osp.join(
+            scene_base_dir, "navmeshes", scene_name + ".navmesh"
         )
+        self.sim.pathfinder.load_nav_mesh(navmesh_path)
 
         self._get_object_target_samplers()
         target_numbers = {
@@ -483,7 +462,6 @@ class RearrangeEpisodeGenerator:
 
         target_receptacles = defaultdict(list)
         all_target_receptacles = []
-        # for sampler_name, sampler in self._target_samplers.items():
         for sampler_name, num_targets in target_numbers.items():
             obj_sampler_name = targ_sampler_name_to_obj_sampler_names[
                 sampler_name
