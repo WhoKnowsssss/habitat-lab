@@ -58,6 +58,8 @@ class CausalSelfAttention(nn.Module):
         #                              .view(1, 1, config.block_size + 1, config.block_size + 1))
         self.n_head = config.n_head
 
+        self.flag=1
+
     def forward(self, x, layer_past=None):
         B, T, C = x.size()
 
@@ -72,6 +74,17 @@ class CausalSelfAttention(nn.Module):
         # if attention_mask is not None: 
         #     att = att.masked_fill(attention_mask.repeat(T,self.n_head,1,1).transpose(0,2) == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
+        
+        # visualize attention
+        import matplotlib.pyplot as plt
+        if self.flag %1000 == 0:
+            fig, axs = plt.subplots(2,4)
+            for i in range(self.n_head):
+                axs[i//4, i%4].imshow(att[0,i].cpu().numpy(), cmap='hot')
+            fig.savefig('att.png', dpi=1200)
+            plt.close()
+        self.flag += 1
+
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -297,5 +310,4 @@ class GPT(nn.Module):
         logits[:,:,9] = logits_loc - 1
         logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
         logits[:,:,-1] = 0
-
         return logits, loss

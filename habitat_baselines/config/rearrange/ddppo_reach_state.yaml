@@ -26,6 +26,8 @@ BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/reach_state.yaml
 GYM_AUTO_NAME: "ReachState"
 ENV_NAME: "RearrangeRLEnv"
 
+EVAL:
+  SPLIT: "eval"
 
 RL:
   POLICY:
@@ -40,6 +42,7 @@ RL:
   SUCCESS_REWARD: 10.0
   GYM_OBS_KEYS: ['joint', 'relative_resting_position']
   GYM_ACTION_KEYS: ['ARM_ACTION']
+  END_ON_SUCCESS: True
 
   PPO:
     # ppo params

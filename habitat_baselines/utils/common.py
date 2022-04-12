@@ -34,6 +34,7 @@ from torch import nn as nn
 from habitat import logger
 from habitat.config import Config
 from habitat.core.dataset import Episode
+from habitat.core.spaces import EmptySpace
 from habitat.core.utils import try_cv2_import
 from habitat.utils import profiling_wrapper
 from habitat.utils.visualizations.utils import images_to_video
@@ -647,11 +648,10 @@ def is_continuous_action_space(action_space) -> bool:
 def get_num_actions(action_space) -> int:
     queue = [action_space]
     num_actions = 0
-    while queue:
+    while len(queue) != 0:
         v = queue.pop()
         if isinstance(v, spaces.Dict):
-            for v in v.spaces.values():
-                queue.append(v)
+            queue.extend(v.spaces.values())
         elif isinstance(v, spaces.Box):
             num_actions += v.shape[0]
         else:
@@ -671,10 +671,13 @@ def action_array_to_dict(
         # No need for a tuple if there is only one action
         root_action_names = root_action_names[0]
     action_name_to_lengths = {}
-    for act_dict in action_space.spaces.values():
-        for k, v in act_dict.items():
-            # The only element in the action
-            action_name_to_lengths[k] = v.shape[0]
+    for outer_k, act_dict in action_space.spaces.items():
+        if isinstance(act_dict, EmptySpace):
+            action_name_to_lengths[outer_k] = 1
+        else:
+            for k, v in act_dict.items():
+                # The only element in the action
+                action_name_to_lengths[k] = v.shape[0]
 
     # Determine action arguments for root_action_name
     action_args = {}

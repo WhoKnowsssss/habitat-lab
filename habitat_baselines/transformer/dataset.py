@@ -110,7 +110,6 @@ class RollingDataset(IterableDataset):
             
             while len(self.queue) == 0:
                 time.sleep(1)
-            # print(f"{self.rank}: YESSSSS\n")
             self.dataset = StateActionReturnDataset.from_config(self.queue.popleft(), self.context_length)
                   
             self.dataset_context['num_init'] += 1

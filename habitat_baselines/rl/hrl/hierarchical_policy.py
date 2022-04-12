@@ -1,12 +1,9 @@
 import os.path as osp
 
-import gym.spaces as spaces
 import torch
-import torch.nn as nn
 
-from habitat.core.spaces import ActionSpace
 from habitat_baselines.common.baseline_registry import baseline_registry
-from habitat_baselines.common.tensor_dict import TensorDict
+from habitat_baselines.common.logging import logger
 from habitat_baselines.rl.hrl.high_level_policy import (  # noqa: F401.
     GtHighLevelPolicy,
     HighLevelPolicy,
@@ -16,6 +13,7 @@ from habitat_baselines.rl.hrl.skills import (  # noqa: F401.
     NnSkillPolicy,
     OracleNavPolicy,
     PickSkillPolicy,
+    PlaceSkillPolicy,
 )
 from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.utils.common import get_num_actions
@@ -38,6 +36,9 @@ class HierarchicalPolicy(Policy):
         for i, (skill_id, use_skill_name) in enumerate(
             config.USE_SKILLS.items()
         ):
+            if use_skill_name == "":
+                # Skip loading this skill if no name is provided
+                continue
             skill_config = config.DEFINED_SKILLS[use_skill_name]
 
             cls = eval(skill_config.skill_name)
@@ -60,6 +61,15 @@ class HierarchicalPolicy(Policy):
             num_envs,
             self._name_to_idx,
         )
+        self._stop_action_idx = 0
+        found = False
+        for k in action_space:
+            if k == "REARRANGE_STOP":
+                found = True
+                break
+            self._stop_action_idx += get_num_actions(action_space[k])
+        if not found:
+            raise ValueError(f"Could not find STOP action in {action_space}")
 
     def eval(self):
         pass
@@ -68,6 +78,10 @@ class HierarchicalPolicy(Policy):
     def num_recurrent_layers(self):
         return self._skills[0].num_recurrent_layers
 
+    @property
+    def should_load_agent_state(self):
+        return False
+
     def parameters(self):
         return self._skills[0].parameters()
 
@@ -75,6 +89,7 @@ class HierarchicalPolicy(Policy):
         for skill in self._skills.values():
             skill.to(device)
         self._call_high_level = self._call_high_level.to(device)
+        self._cur_skills = self._cur_skills.to(device)
 
     def act(
         self,
@@ -95,14 +110,19 @@ class HierarchicalPolicy(Policy):
         batched_prev_actions = prev_actions.unsqueeze(1)
         batched_masks = masks.unsqueeze(1)
 
+        batched_bad_should_terminate = torch.zeros(self._num_envs)
+
         # Check if skills should terminate.
         for batch_idx, skill_idx in enumerate(self._cur_skills):
-            should_terminate = self._skills[skill_idx.item()].should_terminate(
+            should_terminate, bad_should_terminate = self._skills[
+                skill_idx.item()
+            ].should_terminate(
                 batched_observations[batch_idx],
                 batched_rnn_hidden_states[batch_idx],
                 batched_prev_actions[batch_idx],
                 batched_masks[batch_idx],
             )
+            batched_bad_should_terminate[batch_idx] = bad_should_terminate
             self._call_high_level[batch_idx] = should_terminate
 
         # Always call high-level if the episode is over.
@@ -112,10 +132,12 @@ class HierarchicalPolicy(Policy):
 
         # If any skills want to terminate invoke the high-level policy to get
         # the next skill.
+        hl_terminate = torch.zeros(self._num_envs, device=prev_actions.device)
         if self._call_high_level.sum() > 0:
             (
                 new_skills,
                 new_skill_args,
+                hl_terminate,
             ) = self._high_level_policy.get_next_skill(
                 observations,
                 rnn_hidden_states,
@@ -134,13 +156,16 @@ class HierarchicalPolicy(Policy):
                     batched_prev_actions[new_skill_batch_idx],
                 ) = skill.on_enter(
                     new_skill_args[new_skill_batch_idx],
-                    new_skill_batch_idx,
+                    new_skill_batch_idx.item(),
                     batched_observations[new_skill_batch_idx],
                     batched_rnn_hidden_states[new_skill_batch_idx],
                     batched_prev_actions[new_skill_batch_idx],
                 )
-            self._cur_skills = self._call_high_level * new_skills
+            self._cur_skills = (
+                (1.0 - self._call_high_level) * self._cur_skills
+            ) + (self._call_high_level * new_skills)
 
+        # Compute the actions from the current skills
         actions = torch.zeros(
             self._num_envs, get_num_actions(self._action_space)
         )
@@ -155,6 +180,15 @@ class HierarchicalPolicy(Policy):
                 batch_idx,
             )
             actions[batch_idx] = action
+
+        should_terminate = bad_should_terminate + hl_terminate
+        if should_terminate.sum() > 0:
+            # End the episode where requested.
+            for batch_idx in torch.nonzero(should_terminate):
+                logger.info(
+                    f"Calling stop action for batch {batch_idx}, {bad_should_terminate}, {hl_terminate}"
+                )
+                actions[batch_idx, self._stop_action_idx] = 1.0
 
         return (
             None,

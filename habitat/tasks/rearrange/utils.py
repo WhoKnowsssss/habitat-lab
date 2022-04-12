@@ -4,7 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import hashlib
+import logging
 import os
 import os.path as osp
 import pickle
@@ -18,7 +18,16 @@ import numpy as np
 import quaternion
 
 import habitat_sim
+from habitat.core.logging import HabitatLogger
 from habitat_sim.physics import MotionType
+
+logger = HabitatLogger(
+    name="rearrange_task",
+    level=logging.INFO
+    if os.environ.get("HABITAT_REARRANGE_LOG", 0)
+    else logging.ERROR,
+    format_str="[%(levelname)s,%(name)s] %(asctime)-15s %(filename)s:%(lineno)d %(message)s",
+)
 
 
 def make_render_only(obj, sim):
@@ -217,18 +226,9 @@ def allowed_region_to_bb(allowed_region):
     return mn.Range2D(allowed_region[0], allowed_region[1])
 
 
-CACHE_PATH = "./data/cache"
-
-
 class CacheHelper:
-    def __init__(
-        self, cache_name, lookup_val, def_val=None, verbose=False, rel_dir=""
-    ):
-        self.use_cache_path = osp.join(CACHE_PATH, rel_dir)
-        os.makedirs(self.use_cache_path, exist_ok=True)
-        sec_hash = hashlib.md5(str(lookup_val).encode("utf-8")).hexdigest()
-        cache_id = f"{cache_name}_{sec_hash}.pickle"
-        self.cache_id = osp.join(self.use_cache_path, cache_id)
+    def __init__(self, cache_file, def_val=None, verbose=False):
+        self.cache_id = cache_file
         self.def_val = def_val
         self.verbose = verbose
 

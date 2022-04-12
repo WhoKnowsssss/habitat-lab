@@ -770,7 +770,10 @@ class TransformerTrainer(BaseRLTrainer):
         config.TASK_CONFIG.DATASET.SPLIT = config.EVAL.SPLIT
         config.freeze()
 
-        if len(self.config.VIDEO_OPTION) > 0:
+        if (
+            len(self.config.VIDEO_OPTION) > 0
+            and self.config.VIDEO_RENDER_TOP_DOWN
+        ):
             config.defrost()
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP")
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("COLLISIONS")
@@ -802,12 +805,16 @@ class TransformerTrainer(BaseRLTrainer):
         self._setup_transformer_policy()
 
         # self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
-        prefix = ""
+        
+        prefix= ''
+        if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
+            prefix = "module."
+        
         self.transformer_policy.load_state_dict(
             {
                 k[k.find(prefix) + len(prefix) :]: v
                 for k, v in ckpt_dict["state_dict"].items()
-                if prefix in k
+                if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
         )
 
@@ -822,7 +829,7 @@ class TransformerTrainer(BaseRLTrainer):
         )
 
         prev_actions = torch.zeros(
-            self.config.NUM_ENVIRONMENTS, self.config.RL.TRANSFORMER.context_length-1,
+            self.config.NUM_ENVIRONMENTS, self.config.RL.TRANSFORMER.context_length,
             *action_shape,
             device=self.device,
             dtype=torch.long if discrete_actions else torch.float,
@@ -879,12 +886,29 @@ class TransformerTrainer(BaseRLTrainer):
         pbar = tqdm(total=number_of_eval_episodes)
         self.transformer_policy.eval()
 
+        name_list = list(range(10,110,10))
+        name_list.reverse()
+        name__ = name_list.pop()
+        gt = torch.load('data/temp_data/{}.pt'.format(name__), map_location=torch.device('cpu'))
+        self.gt_actions = gt["actions"]
+        self.gt_observations = gt["obs"]
+        obs_fix = []
+        idxxx=0
+
+            
         while (
             len(stats_episodes) < number_of_eval_episodes
             and self.envs.num_envs > 0
         ):
             current_episodes = self.envs.current_episodes()
 
+
+            batch_list2 = self.gt_observations[max(0,idxxx+1-30):idxxx+1]
+            for k in batch_list2[0].keys():
+                batch_list2[-1][k] = batch_list2[-1][k].to(prev_actions.device).unsqueeze(0)
+                print(torch.sum(torch.abs(batch_list2[-1][k] - batch_list[-1][k])))
+                # batch_list[i]['robot_head_depth'] = batch_list[i]['robot_head_depth']
+            # batch_list = batch_list2
             with torch.no_grad(): 
                 actions = self.transformer_policy.act(
                     batch_list,
@@ -894,7 +918,26 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps=timesteps,
                     valid_context=valid_context,
                 )
-
+            print(actions)
+            if idxxx < 0:
+                pass
+                actions = torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
+            else:
+                pass
+                # gt["obs_fix"] = obs_fix
+                # torch.save(gt, 'data/temp_data/{}_fix.pt'.format(name__))
+                # name__ = name_list.pop()
+                # gt = torch.load('data/temp_data/{}.pt'.format(name__), map_location=torch.device('cpu'))
+                # self.gt_actions = gt["actions"]
+                # self.gt_observations = gt["obs"]
+                # idxxx = 0
+                # obs_fix = []
+                # continue
+            differnce = actions - torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
+            print(differnce, self.gt_actions[idxxx])
+            gt_observations = self.gt_observations[idxxx]
+            # print(gt_observations['robot_head_depth'] - observations[0]['robot_head_depth'])
+            idxxx += 1
             # if timesteps[0,0,0].item() == 49:
             #     print()
             prev_actions = torch.cat((prev_actions[:,1:,:], actions.unsqueeze(1)), dim=1)  # type: ignore
@@ -916,6 +959,9 @@ class TransformerTrainer(BaseRLTrainer):
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
+
+            obs_fix.append(observations[0])
+
             batch = batch_obs(
                 observations,
                 device=self.device,
@@ -974,6 +1020,7 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps[i,0,0] = 0
                     rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
 
+                    
                     if len(self.config.VIDEO_OPTION) > 0:
                         generate_video(
                             video_option=self.config.VIDEO_OPTION,
@@ -1033,6 +1080,10 @@ class TransformerTrainer(BaseRLTrainer):
                 rgb_frames,
             )
 
+        
+
+        
+        
         num_episodes = len(stats_episodes)
         aggregated_stats = {}
         for stat_key in next(iter(stats_episodes.values())).keys():

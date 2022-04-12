@@ -6,8 +6,12 @@ scene_sets:
   -
     name: "scene_train_split"
     included_substrings:
-      - "v3"
+      - "v3_sc0_staging"
+      - "v3_sc1_staging"
+      - "v3_sc2_staging"
+      - "v3_sc3_staging"
     excluded_substrings: []
+    comment: "sc4_staging saved for evaluation"
 
 object_sets:
   -
@@ -48,7 +52,7 @@ scene_sampler:
 
 object_samplers:
   -
-    name: "hab2"
+    name: "any_targets"
     type: "uniform"
     params:
       object_sets: ["hab2"]
@@ -58,10 +62,10 @@ object_samplers:
 
 object_target_samplers:
   -
-    name: "hab2_targets"
+    name: "any_targets"
     type: "uniform"
     params:
-      object_samplers: ["hab2"]
+      object_samplers: ["any_targets"]
       receptacle_sets: ["hab2"]
       num_samples: [5, 5]
       orientation_sampling: "up"

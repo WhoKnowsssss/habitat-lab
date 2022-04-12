@@ -25,11 +25,12 @@ from habitat.tasks.rearrange.utils import (
     IkHelper,
     get_aabb,
     is_pb_installed,
+    logger,
     make_render_only,
     rearrange_collision,
 )
 from habitat_sim.nav import NavMeshSettings
-from habitat_sim.physics import MotionType
+from habitat_sim.physics import JointMotorSettings, MotionType
 
 # flake8: noqa
 from habitat_sim.robots import FetchRobot, FetchRobotNoWheels
@@ -43,12 +44,6 @@ class RearrangeSim(HabitatSim):
         agent_config = self.habitat_config
 
         agent_cfg = self._get_agent_config()
-
-        self.navmesh_settings = NavMeshSettings()
-        self.navmesh_settings.set_defaults()
-        self.navmesh_settings.agent_radius = agent_cfg.RADIUS
-        self.navmesh_settings.agent_height = agent_cfg.HEIGHT
-        self.navmesh_settings.agent_max_climb = 0.05
 
         self.first_setup = True
         self.ep_info: Optional[Config] = None
@@ -213,6 +208,10 @@ class RearrangeSim(HabitatSim):
         self.robot.params.arm_init_params = use_arm_start
         self.robot.reset()
 
+        self.robot.params.cameras[
+            "robot_head"
+        ].cam_offset_pos = mn.Vector3(0.26, 1.2, 0.0)
+
         # consume a fixed position from SIMUALTOR.AGENT_0 if configured
         if self.habitat_config.AGENT_0.IS_SET_START_STATE:
             self.robot.base_pos = mn.Vector3(
@@ -247,7 +246,7 @@ class RearrangeSim(HabitatSim):
             self.sleep_all_objects()
 
         if new_scene:
-            self._recompute_navmesh()
+            self._load_navmesh()
 
         # Get the starting positions of the target objects.
         rom = self.get_rigid_object_manager()
@@ -277,14 +276,16 @@ class RearrangeSim(HabitatSim):
             }
 
     def set_robot_base_to_random_point(self):
-        for _ in range(50):
+        MAX_ATTEMPTS = 50
+        for attempt_i in range(MAX_ATTEMPTS):
             start_pos = self.pathfinder.get_random_navigable_point()
+
+            start_pos = self.safe_snap_point(start_pos)
             start_rot = np.random.uniform(0, 2 * np.pi)
 
             self.robot.base_pos = start_pos
             self.robot.base_rot = start_rot
-
-            self.internal_step(-1)
+            self.perform_discrete_collision_detection()
             did_collide, details = rearrange_collision(
                 self,
                 True,
@@ -292,6 +293,10 @@ class RearrangeSim(HabitatSim):
             )
             if not did_collide:
                 break
+        if attempt_i == MAX_ATTEMPTS - 1:
+            logger.warning(
+                f"Could not find a collision free start for {self.ep_info['episode_id']}"
+            )
 
     def _setup_targets(self):
         self._targets = {}
@@ -300,61 +305,20 @@ class RearrangeSim(HabitatSim):
                 [[transform[j][i] for j in range(4)] for i in range(4)]
             )
 
-    def get_nav_pos(self, pos):
-        pos = mn.Vector3(*pos)
-        height_thresh = 0.16
-        z_min = -0.2
-        use_vs = np.array(self.pathfinder.build_navmesh_vertices())
+    def _load_navmesh(self):
+        scene_name = self.ep_info["scene_id"].split("/")[-1].split(".")[0]
+        base_dir = osp.join(*self.ep_info["scene_id"].split("/")[:2])
 
-        if height_thresh is not None:
-            use_vs = use_vs[use_vs[:, 1] < height_thresh]
-        if z_min is not None:
-            use_vs = use_vs[use_vs[:, 2] > z_min]
-        dists = np.linalg.norm(
-            use_vs[:, [0, 2]] - np.array(pos)[[0, 2]], axis=-1
+        navmesh_path = osp.join(base_dir, "navmeshes", scene_name + ".navmesh")
+        self.pathfinder.load_nav_mesh(navmesh_path)
+
+        self._navmesh_vertices = np.stack(
+            self.pathfinder.build_navmesh_vertices(), axis=0
         )
-
-        closest_idx = np.argmin(dists)
-        return use_vs[closest_idx]
-
-    def _recompute_navmesh(self):
-        """Generates the navmesh or loads the saved navmesh if it exists. This must be called
-        AFTER adding articulated objects to the scene.
-        """
-
-        scene_name = self.ep_info["scene_id"]
-        navmesh_path = scene_name.split(".glb")[0] + ".navmesh"
-
-        if osp.exists(navmesh_path) and not self.habitat_config.get(
-            "FORCE_RECOMPUTE_NAVMESH", False
-        ):
-            self.pathfinder.load_nav_mesh(navmesh_path)
-        else:
-            # cache current motiontype and set to STATIC for inclusion in the NavMesh computation
-            motion_types = []
-            for art_obj in self.art_objs:
-                motion_types.append(art_obj.motion_type)
-                art_obj.motion_type = MotionType.STATIC
-
-            # compute new NavMesh
-            self.recompute_navmesh(
-                self.pathfinder,
-                self.navmesh_settings,
-                include_static_objects=True,
-            )
-            # optionally save the new NavMesh
-            self.pathfinder.save_nav_mesh(navmesh_path)
-            # reset cached MotionTypes
-            for art_obj, motion_type in zip(self.art_objs, motion_types):
-                art_obj.motion_type = motion_type
-
-    def _get_non_frl_objs(self):
-        rom = self.get_rigid_object_manager()
-        return [
-            handle
-            for handle in rom.get_object_handles()
-            if "frl" not in handle
+        self._island_sizes = [
+            self.pathfinder.island_radius(p) for p in self._navmesh_vertices
         ]
+        self._max_island_size = max(self._island_sizes)
 
     def _clear_objects(self, should_add_objects: bool) -> None:
         rom = self.get_rigid_object_manager()
@@ -403,15 +367,32 @@ class RearrangeSim(HabitatSim):
         snap_point can return nan which produces hard to catch errors.
         """
         new_pos = self.pathfinder.snap_point(pos)
-        if np.isnan(new_pos[0]):
-            navmesh_vertices = np.stack(
-                self.pathfinder.build_navmesh_vertices(), axis=0
-            )
+        island_radius = self.pathfinder.island_radius(new_pos)
+
+        if np.isnan(new_pos[0]) or island_radius != self._max_island_size:
+            # The point is not valid or not in a different island. Find a
+            # different point nearby that is on a different island and is
+            # valid.
+            for _ in range(10):
+                new_pos = self.pathfinder.get_random_navigable_point_near(
+                    pos, 1.5, 1000
+                )
+                island_radius = self.pathfinder.island_radius(new_pos)
+                if island_radius == self._max_island_size:
+                    break
+
+        if np.isnan(new_pos[0]) or island_radius != self._max_island_size:
+            # This is a last resort, take a navmesh vertex that is closest
+            use_verts = [
+                x
+                for s, x in zip(self._island_sizes, self._navmesh_vertices)
+                if s == self._max_island_size
+            ]
             distances = np.linalg.norm(
-                np.array(pos).reshape(1, 3) - navmesh_vertices, axis=-1
+                np.array(pos).reshape(1, 3) - use_verts, axis=-1
             )
             closest_idx = np.argmin(distances)
-            new_pos = navmesh_vertices[closest_idx]
+            new_pos = self._navmesh_vertices[closest_idx]
 
         return new_pos
 
@@ -462,6 +443,12 @@ class RearrangeSim(HabitatSim):
             self.art_objs.append(ao_mgr.get_object_by_handle(aoi_handle))
 
     def _create_obj_viz(self, ep_info: Config):
+        """
+        Adds a visualization of the goal for each of the target objects in the
+        scene. This is the same as the target object, but is a render only
+        object. This also places dots around the bounding box of the object to
+        further distinguish the goal from the target object.
+        """
         for marker_name, m in self._markers.items():
             m_T = m.get_current_transform()
             self.viz_ids[marker_name] = self.visualize_position(
@@ -546,6 +533,7 @@ class RearrangeSim(HabitatSim):
         Sets the simulation state from a cached state info dict. See capture_state().
 
           :param set_hold: If true this will set the snapped object from the `state`.
+
           TODO: This should probably be True by default, but I am not sure the effect
           it will have.
         """
@@ -582,7 +570,8 @@ class RearrangeSim(HabitatSim):
     def step(self, action: Union[str, int]) -> Observations:
         rom = self.get_rigid_object_manager()
 
-        self._update_markers()
+        if self.habitat_config.NEEDS_MARKERS:
+            self._update_markers()
 
         if self.habitat_config.DEBUG_RENDER:
             rom = self.get_rigid_object_manager()
@@ -612,20 +601,20 @@ class RearrangeSim(HabitatSim):
             self.viz_ids = defaultdict(lambda: None)
 
         self.grasp_mgr.update()
+        if self.robot is not None and self.habitat_config.UPDATE_ROBOT:
+            self.robot.update()
 
         if self.habitat_config.CONCUR_RENDER:
             self._prev_sim_obs = self.start_async_render()
 
             for _ in range(self.ac_freq_ratio):
-                self.internal_step(-1)
-            # self.internal_step(0.008 * self.ac_freq_ratio)
+                self.internal_step(-1, update_robot=False)
 
             self._prev_sim_obs = self.get_sensor_observations_async_finish()
             obs = self._sensor_suite.get_observations(self._prev_sim_obs)
         else:
             for _ in range(self.ac_freq_ratio):
-                self.internal_step(-1)
-            # self.internal_step(0.008 * self.ac_freq_ratio)
+                self.internal_step(-1, update_robot=False)
             self._prev_sim_obs = self.get_sensor_observations()
             obs = self._sensor_suite.get_observations(self._prev_sim_obs)
 
@@ -683,7 +672,9 @@ class RearrangeSim(HabitatSim):
         viz_obj.translation = mn.Vector3(*position)
         return viz_obj.object_id
 
-    def internal_step(self, dt: Union[int, float]) -> None:
+    def internal_step(
+        self, dt: Union[int, float], update_robot: bool = True
+    ) -> None:
         """Step the world and update the robot.
 
         :param dt: Timestep by which to advance the world. Multiple physics substeps can be excecuted within a single timestep. -1 indicates a single physics substep.
@@ -694,8 +685,10 @@ class RearrangeSim(HabitatSim):
         # optionally step physics and update the robot for benchmarking purposes
         if self.habitat_config.get("STEP_PHYSICS", True):
             self.step_world(dt)
-            if self.robot is not None and self.habitat_config.get(
-                "UPDATE_ROBOT", True
+            if (
+                update_robot
+                and self.robot is not None
+                and self.habitat_config.UPDATE_ROBOT
             ):
                 self.robot.update()
 
@@ -720,7 +713,7 @@ class RearrangeSim(HabitatSim):
 
     def get_target_objs_start(self) -> np.ndarray:
         """Get the initial positions of all objects targeted for rearrangement as a numpy array."""
-        return np.array(self.target_start_pos)
+        return self.target_start_pos
 
     def get_scene_pos(self) -> np.ndarray:
         """Get the positions of all clutter RigidObjects in the scene as a numpy array."""

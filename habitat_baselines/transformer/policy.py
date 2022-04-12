@@ -459,17 +459,19 @@ class TransformerResnetNet(Net):
         assert ((targets is not None) != (current_context is not None)), "Training or Evaluating? "
         if outs.shape[1] < self.context_length and (current_context is not None):
             outs = torch.cat((torch.zeros((outs.shape[0], self.context_length - outs.shape[1], outs.shape[2]), device=outs.device), outs), dim=1)
-        
+
         # Move valid state-action-reward pair to the left
         if current_context is not None:
             rtgs_ = torch.zeros_like(rtgs)
             prev_actions_ = torch.zeros_like(prev_actions)
+            outs_ = torch.zeros_like(outs)
             for i in range(current_context.shape[0]):
-                rtgs_[i,:current_context[i],:] = rtgs_[i,-current_context[i]:,:]
-                prev_actions_[i,:current_context[i],:] = prev_actions_[i,-current_context[i]:,:]
-                outs[i,:current_context[i],:] = outs[i,-current_context[i]:,:]
-            logits, loss = self.state_encoder(outs, prev_actions_, targets=targets, rtgs=rtgs_, timesteps=timesteps)
+                rtgs_[i,:current_context[i],:] = rtgs[i,-current_context[i]:,:]
+                prev_actions_[i,:current_context[i],:] = prev_actions[i,-current_context[i]:,:]
+                outs_[i,:current_context[i],:] = outs[i,-current_context[i]:,:]
+            logits, loss = self.state_encoder(outs_, prev_actions_, targets=targets, rtgs=rtgs_, timesteps=timesteps)
+
         else:
-            logits, loss = self.state_encoder(outs, prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps)
+            logits, loss = self.state_encoder(outs, prev_actions_, targets=prev_actions_, rtgs=rtgs, timesteps=timesteps)
 
         return logits, loss

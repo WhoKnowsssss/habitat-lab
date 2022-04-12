@@ -11,8 +11,92 @@ import habitat_sim
 from habitat.core.embodied_task import Measure
 from habitat.core.registry import registry
 from habitat.core.simulator import Sensor, SensorTypes
+from habitat.tasks.rearrange.multi_task.rearrange_pddl import (
+    RearrangeObjectTypes,
+)
+from habitat.tasks.rearrange.rearrange_sensors import RearrangeReward
+from habitat.tasks.utils import cartesian_to_polar
 
 BASE_ACTION_NAME = "BASE_VELOCITY"
+
+
+@registry.register_sensor
+class TargetOrGoalStartPointGoalSensor(Sensor):
+    """
+    GPS and compass sensor relative to the starting target position. Only for
+    the first target object.
+    """
+
+    cls_uuid: str = "object_to_agent_gps_compass"
+
+    def __init__(self, *args, sim, task, **kwargs):
+        self._task = task
+        self._sim = sim
+        super().__init__(*args, task=task, **kwargs)
+
+    def _get_uuid(self, *args, **kwargs):
+        return TargetOrGoalStartPointGoalSensor.cls_uuid
+
+    def _get_sensor_type(self, *args, **kwargs):
+        return SensorTypes.TENSOR
+
+    def _get_observation_space(self, *args, config, **kwargs):
+        return spaces.Box(
+            shape=(2,),
+            low=np.finfo(np.float32).min,
+            high=np.finfo(np.float32).max,
+            dtype=np.float32,
+        )
+
+    def get_observation(self, task, *args, **kwargs):
+        robot_T = self._sim.robot.base_transformation
+
+        if task.nav_to_obj_type == RearrangeObjectTypes.GOAL_POSITION:
+            to_pos = self._sim.get_targets()[1][self._task.targ_idx]
+        elif task.nav_to_obj_type == RearrangeObjectTypes.RIGID_OBJECT:
+            to_pos = self._sim.get_target_objs_start()[self._task.targ_idx]
+        else:
+            raise ValueError(
+                f"Got navigate to object type {RearrangeObjectTypes.RIGID_OBJECT}"
+            )
+
+        dir_vector = robot_T.inverted().transform_point(to_pos)
+        rho, phi = cartesian_to_polar(dir_vector[0], dir_vector[1])
+
+        return np.array([rho, -phi], dtype=np.float32)
+
+
+@registry.register_sensor
+class NavToSkillSensor(Sensor):
+    cls_uuid: str = "nav_to_skill"
+
+    def __init__(self, sim, config, *args, **kwargs):
+        self._config = config
+        super().__init__(config=config)
+
+    def _get_uuid(self, *args, **kwargs):
+        return NavToSkillSensor.cls_uuid
+
+    def _get_sensor_type(self, *args, **kwargs):
+        return SensorTypes.TENSOR
+
+    def _get_observation_space(self, *args, config, **kwargs):
+        return spaces.Box(
+            shape=(self._config.NUM_SKILLS,),
+            low=np.finfo(np.float32).min,
+            high=np.finfo(np.float32).max,
+            dtype=np.float32,
+        )
+
+    def get_observation(self, task, *args, **kwargs):
+        ret = np.zeros(self._config.NUM_SKILLS, dtype=np.float32)
+        if task.nav_to_task_name is None or task.domain is None:
+            return ret
+        skills = task.domain.action_names
+
+        cur_idx = skills.index(task.nav_to_task_name)
+        ret[cur_idx] = 1.0
+        return ret
 
 
 @registry.register_sensor
@@ -43,7 +127,7 @@ class DistToNavGoalSensor(Sensor):
             agent_pos,
             task.nav_target_pos,
         )
-        return distance_to_target
+        return np.array([distance_to_target])
 
 
 @registry.register_sensor
@@ -65,7 +149,42 @@ class NavGoalSensor(Sensor):
         )
 
     def get_observation(self, task, *args, **kwargs):
-        return task.nav_target_pos
+        return task.nav_target_pos.astype(np.float32)
+
+
+@registry.register_sensor
+class NavRotToGoalSensor(Sensor):
+    """
+    Warning: This represents priviledged information in the task.
+    """
+
+    cls_uuid: str = "nav_rot_to_goal_sensor"
+
+    def _get_uuid(self, *args, **kwargs):
+        return NavRotToGoalSensor.cls_uuid
+
+    def __init__(self, sim, config, *args, **kwargs):
+        super().__init__(config=config)
+        self._sim = sim
+
+    def _get_sensor_type(self, *args, **kwargs):
+        return SensorTypes.TENSOR
+
+    def _get_observation_space(self, *args, config, **kwargs):
+        return spaces.Box(
+            shape=(1,),
+            low=np.finfo(np.float32).min,
+            high=np.finfo(np.float32).max,
+            dtype=np.float32,
+        )
+
+    def get_observation(self, task, *args, **kwargs):
+        heading_angle = float(self._sim.robot.base_rot)
+        angle_dist = np.arctan2(
+            np.sin(heading_angle - task.nav_target_angle),
+            np.cos(heading_angle - task.nav_target_angle),
+        )
+        return np.abs(angle_dist)
 
 
 @registry.register_sensor
@@ -99,12 +218,6 @@ class OracleNavigationActionSensor(Sensor):
         found_path = self._sim.pathfinder.find_path(path)
         if not found_path:
             return [agent_pos, point]
-        # print(
-        #    "   path finding: starting from",
-        #    agent_pos,
-        #    " navigating to ",
-        #    path.points,
-        # )
         return path.points
 
     def get_observation(self, task, *args, **kwargs):
@@ -126,7 +239,7 @@ class GeoMeasure(Measure):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def _get_agent_pos(self):
@@ -147,7 +260,7 @@ class GeoMeasure(Measure):
 
 
 @registry.register_measure
-class NavToObjReward(GeoMeasure):
+class NavToObjReward(RearrangeReward):
     cls_uuid: str = "nav_to_obj_reward"
 
     @staticmethod
@@ -166,34 +279,31 @@ class NavToObjReward(GeoMeasure):
         )
         self._cur_angle_dist = -1.0
         self._give_turn_reward = False
+        self._prev_dist = -1.0
         super().reset_metric(
             *args,
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
-        reward = self._config.SLACK_REWARD
+        reward = 0.0
         cur_dist = task.measurements.measures[DistToGoal.cls_uuid].get_metric()
+        if self._prev_dist < 0.0:
+            dist_diff = 0.0
+        else:
+            dist_diff = self._prev_dist - cur_dist
 
-        reward += self._prev_dist - cur_dist
+        reward += self._config.DIST_REWARD * dist_diff
         self._prev_dist = cur_dist
-
-        success = task.measurements.measures[
-            NavToObjSuccess.cls_uuid
-        ].get_metric()
 
         bad_terminate_pen = task.measurements.measures[
             BadCalledTerminate.cls_uuid
         ].reward_pen
         reward -= bad_terminate_pen
 
-        if success:
-            reward += self._config.SUCCESS_REWARD
-
-        # if self._give_turn_reward:
         if (
             self._config.SHOULD_REWARD_TURN
             and cur_dist < self._config.TURN_REWARD_DIST
@@ -231,7 +341,7 @@ class SPLToObj(GeoMeasure):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
@@ -288,7 +398,7 @@ class BadCalledTerminate(GeoMeasure):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
@@ -301,11 +411,11 @@ class BadCalledTerminate(GeoMeasure):
                 remaining = (
                     self._config.ENVIRONMENT.MAX_EPISODE_STEPS - self._n_steps
                 )
-                self.reward_pen -= -self._config.BAD_TERM_PEN * (
+                self.reward_pen -= self._config.BAD_TERM_PEN * (
                     remaining / self._config.ENVIRONMENT.MAX_EPISODE_STEPS
                 )
             else:
-                self.reward_pen = -self._config.BAD_TERM_PEN
+                self.reward_pen = self._config.BAD_TERM_PEN
             self._metric = 1.0
         else:
             self._metric = 0.0
@@ -330,7 +440,7 @@ class NavToPosSucc(GeoMeasure):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
@@ -359,7 +469,7 @@ class NavToObjSuccess(GeoMeasure):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
