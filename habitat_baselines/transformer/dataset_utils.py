@@ -6,6 +6,7 @@ from collections import deque
 
 import numpy as np
 import torch
+import numba
 
 
 from habitat import Config, logger 
@@ -54,22 +55,45 @@ def read_dataset(
             temp_actions = torch.stack(dataset_raw["actions"]).numpy()
             temp_stepwise_returns = torch.cat(dataset_raw["rewards"]).numpy()
             temp_dones = torch.cat(dataset_raw["masks"]).numpy()
-            temp_done_idxs = np.argwhere(torch.cat(dataset_raw["masks"]).numpy() == False).squeeze()
+
+            # stepwise_idx = np.argwhere(np.all(temp_actions[:,8:10] == 0, axis=-1) & temp_dones == True).squeeze()
+
+            # temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+            # temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+            # temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+            # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+
+            temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
 
             idx = np.nonzero(temp_done_idxs[1:] - temp_done_idxs[:-1] < 30)[0]
             if len(idx) > 0:
-                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[:-1][i]+1 , temp_done_idxs[1:][i]+1) for i in idx])
+
+                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[:-1][i] , temp_done_idxs[1:][i]) for i in idx])
 
                 temp_obs = np.delete(temp_obs, stepwise_idx, 0)
                 temp_actions = np.delete(temp_actions, stepwise_idx, 0)
                 temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
                 temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
-            temp_done_idxs = np.argwhere(temp_dones == False).squeeze()
+                
+
+            temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
+
+            idx = np.nonzero(temp_stepwise_returns[temp_done_idxs-1] < 90)[0]
+            if len(idx) > 0:
+                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[i-1] if i > 0 else 0, temp_done_idxs[i]) for i in idx])
+
+                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+
+            temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
+
             l = temp_done_idxs[1:] - temp_done_idxs[:-1]
             # debug
             assert all(l <= 400), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
-            assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
+            # assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
             # print(f"file:  {file}  dn:  {temp_done_idxs}")
 
             obss += [temp_obs]
@@ -83,36 +107,7 @@ def read_dataset(
     stepwise_returns = np.concatenate(stepwise_returns)
     done_idxs = np.concatenate(done_idxs)
 
-    # -- create reward-to-go dataset
-    start_index = 0
-    rlist = []
-    rtg = np.zeros_like(stepwise_returns)
-    for i in done_idxs:
-        i = int(i)
-        curr_traj_returns = stepwise_returns[start_index:i]
-        for j in range(i-1, start_index-1, -1): # start from i-1
-            rtg_j = curr_traj_returns[j-start_index:i-start_index]
-            rtg[j] = sum(rtg_j)
-        
-        rlist.append(sum(curr_traj_returns))
-        start_index = i
-
-    # logger.info(
-    #     "Success rate: {}.".format(
-
-    #         sum((np.array(rlist) > 100)) / len(rlist)
-    #     )
-    # )
-        
-    # print('max rtg is %d' % max(rtg))
-    # -- create timestep dataset
-    start_index = 0
-    timesteps = np.zeros(len(actions)+1, dtype=int)
-    for i in done_idxs:
-        i = int(i)
-        timesteps[start_index:i+1] = np.arange(i+1 - start_index)
-        start_index = i+1
-    # print('max timestep is %d' % max(timesteps))
+    rtg, timesteps = _timesteps_rtg(done_idxs, stepwise_returns)
 
     if verbose:
         logger.info(
@@ -123,6 +118,23 @@ def read_dataset(
 
 
     return obss, actions, done_idxs, rtg, timesteps
+
+@numba.jit(nopython=True, parallel=True)
+def _timesteps_rtg(done_idxs, stepwise_returns):
+    rtg = np.zeros_like(stepwise_returns)
+    timesteps = np.zeros(len(stepwise_returns), dtype=np.int64)
+    start_index = np.concatenate((np.array([0], dtype=np.int64), done_idxs[:-1]))
+    for i in numba.prange(len(done_idxs)):
+        start = start_index[i]
+        done = done_idxs[i]
+        curr_traj_returns = stepwise_returns[start:done]
+
+        for j in numba.prange(done - start):
+            rtg[j+start] = np.sum(curr_traj_returns[j:])
+        
+        timesteps[start:done] = np.arange(done - start)
+    return rtg, timesteps
+
 
 def producer(
     config: Config, 

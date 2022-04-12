@@ -36,22 +36,14 @@ class StateActionReturnDataset(Dataset):
         return len(self.data) - self.block_size
 
     def __getitem__(self, idx):
-        block_size = self.block_size // 3
-        # idx = idx + block_size
-
-        done_idx = min(self.done_idxs[np.nonzero(self.done_idxs > idx)[0][0]], idx + block_size)
-        # for i in self.done_idxs:
-        #     if i > idx: # first done_idx greater than idx
-        #         done_idx = min(int(i), done_idx)
-        #         break
+        block_size = self.block_size
+        done_idx = min(self.done_idxs[np.searchsorted(self.done_idxs, idx)], idx + block_size)
         idx = done_idx - block_size
         # states = states / 255.
         
-        try:
-            assert (idx >= 0), f"\n\n\n\ERROR on indexing, idx: {idx}, done_idx: {done_idx}, {self.done_idxs}"
-        except AssertionError as e:
-            print(e)
+        if idx < 0:
             idx, done_idx = 0, block_size
+            print(f"ERROR on indexing, idx: {idx}, done_idx: {done_idx}, {self.done_idxs}")
         states = self.data[idx:done_idx]
         assert (len(states) == 30), "Error on states length"
         
@@ -137,7 +129,7 @@ class RollingDataset(IterableDataset):
 
             rng = np.random.default_rng(self.seed)
             if self.producer is None:
-                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, True))
+                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False)) # config, np.RNG, queue, verbose
                 self.producer.start()
             # print(self.producer.is_alive() )
 

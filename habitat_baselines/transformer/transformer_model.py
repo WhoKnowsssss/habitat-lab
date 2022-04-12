@@ -110,7 +110,7 @@ class GPT(nn.Module):
 
         self.model_type = config.model_type
 
-        self.num_inputs = 4
+        self.num_inputs = 3
 
         config.block_size = config.block_size * self.num_inputs
         
@@ -144,7 +144,7 @@ class GPT(nn.Module):
         if config.num_states[0] == 0:
             self.state_encoder = nn.Sequential(nn.Linear(config.num_states[1], config.n_embd), nn.Tanh())
         else:
-            self.state_encoder = nn.ModuleList([nn.Sequential(nn.Linear(i, config.n_embd), nn.Tanh()) for i in [17]])
+            self.state_encoder = nn.ModuleList([nn.Sequential(nn.Linear(i, config.n_embd//2), nn.Tanh()) for i in [14]])
 
         self.ret_emb = nn.Sequential(nn.Linear(1, config.n_embd), nn.Tanh())
 
@@ -221,7 +221,7 @@ class GPT(nn.Module):
         # attention_mask: (batch, block_size)
 
 
-        state_inputs = list(torch.split(states,[self.n_embd,17], -1))
+        state_inputs = list(torch.split(states,[self.n_embd//2,14], -1))
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
         # vision_embeddings = vision_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd//2) # (batch, block_size, n_embd)
 
@@ -236,9 +236,14 @@ class GPT(nn.Module):
             token_embeddings = torch.zeros((states.shape[0], self.config.block_size, self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
             
             token_embeddings[:,::self.num_inputs,:] = rtg_embeddings
-            for i in range(len(state_inputs)):
-                token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
+
+            # for i in range(len(state_inputs)):
+            #     token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
+            token_embeddings[:,1::self.num_inputs,:] = torch.cat(state_inputs, dim=-1)
+            
             token_embeddings[:,(self.num_inputs-1)::self.num_inputs,:] = action_embeddings
+        
+        
         elif actions is None and self.model_type == 'reward_conditioned': # only happens at very first timestep of evaluation
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
 
@@ -281,8 +286,9 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
+            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.0)
             loss += F.mse_loss(logits_arm, targets[:,:,:8])
+            # loss += F.binary_cross_entropy_with_logits(logits_stop.squeeze(), torch.any(targets[:,:,:8]!=0, dim=-1).float().squeeze())
 
         logits_loc = torch.argmax(logits_loc,dim=-1)
         logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)

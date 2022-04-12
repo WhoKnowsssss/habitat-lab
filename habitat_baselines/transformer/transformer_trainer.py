@@ -278,7 +278,7 @@ class TransformerTrainer(BaseRLTrainer):
         manager = mp.Manager()
         self.dataset_context = manager.dict()
         self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, 
-                                self.config.RL.TRANSFORMER.context_length*3, 
+                                self.config.RL.TRANSFORMER.context_length, 
                                 (world_size, world_rank, self.config.TASK_CONFIG.SEED), 
                                 self.dataset_context,
                                 rank0_only()
