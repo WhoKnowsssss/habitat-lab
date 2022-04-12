@@ -81,7 +81,7 @@ class ObjectSampler:
         nav_to_min_distance: float = -1.0,
     ) -> None:
         """
-        :param nav_to_min_distance: -1.0 means there will be accessibility constraint.
+        :param nav_to_min_distance: -1.0 means there will be no accessibility constraint. Positive values indicate minimum distance from sampled object to a navigable point.
         """
         self.object_set = object_set
         self.receptacle_sets = receptacle_sets
@@ -226,6 +226,7 @@ class ObjectSampler:
         navmesh_vertices = np.stack(
             sim.pathfinder.build_navmesh_vertices(), axis=0
         )
+        # Note: we cache the largest island to reject samples which are primarily accessible from disconnected navmesh regions. This assumption limits sampling to the largest navigable component of any scene.
         self.largest_island_size = max(
             [sim.pathfinder.island_radius(p) for p in navmesh_vertices]
         )
@@ -294,7 +295,7 @@ class ObjectSampler:
                     logger.info(
                         f"Successfully sampled (snapped) object placement in {num_placement_tries} tries."
                     )
-                    if not self.is_accessible(sim, new_object):
+                    if not self._is_accessible(sim, new_object):
                         continue
                     return new_object
 
@@ -302,7 +303,7 @@ class ObjectSampler:
                 logger.info(
                     f"Successfully sampled object placement in {num_placement_tries} tries."
                 )
-                if not self.is_accessible(sim, new_object):
+                if not self._is_accessible(sim, new_object):
                     continue
                 return new_object
 
@@ -316,13 +317,24 @@ class ObjectSampler:
 
         return None
 
-    def is_accessible(self, sim, new_object):
+    def _is_accessible(self, sim, new_object) -> bool:
+        """
+        Return if the object is within a threshold distance of the nearest
+        navigable point and that the nearest navigable point is on the same
+        navigation mesh.
+
+        Note that this might not catch all edge cases since the distance is
+        based on Euclidean distance. The nearest navigable point may be
+        separated from the object by an obstacle.
+        """
         if self.nav_to_min_distance == -1:
             return True
         snapped = sim.pathfinder.snap_point(new_object.translation)
-        island_radius = sim.pathfinder.island_radius(snapped)
-        dist = np.linalg.norm(
-            np.array((snapped - new_object.translation))[[0, 2]]
+        island_radius: float = sim.pathfinder.island_radius(snapped)
+        dist = float(
+            np.linalg.norm(
+                np.array((snapped - new_object.translation))[[0, 2]]
+            )
         )
         return (
             dist < self.nav_to_min_distance
@@ -335,7 +347,7 @@ class ObjectSampler:
         snap_down: bool = False,
         vdb: Optional[DebugVisualizer] = None,
         fixed_target_receptacle=None,
-        fixed_obj_handle=None,
+        fixed_obj_handle: Optional[str] = None,
     ) -> Optional[habitat_sim.physics.ManagedRigidObject]:
         # draw a new pairing
         if fixed_obj_handle is None:
@@ -587,7 +599,7 @@ class CompositeArticulatedObjectStateSampler(ArticulatedObjectStateSampler):
                 )
 
     def sample(
-        self, sim: habitat_sim.Simulator, receptacles
+        self, sim: habitat_sim.Simulator, receptacles: List[Receptacle]
     ) -> Optional[
         Dict[habitat_sim.physics.ManagedArticulatedObject, Dict[int, float]]
     ]:
