@@ -59,7 +59,10 @@ _C.TASK.COUNT_OBJ_COLLISIONS = True
 _C.TASK.COUNT_ROBOT_OBJ_COLLS = False
 _C.TASK.SETTLE_STEPS = 5
 _C.TASK.CONSTRAINT_VIOLATION_ENDS_EPISODE = False
-_C.TASK.FORCE_REGENERATE = False
+_C.TASK.FORCE_REGENERATE = (
+    False  # Forced to regenerate the starts even if they are already cached.
+)
+_C.TASK.SHOULD_SAVE_TO_CACHE = True  # Saves the generated starts to a cache if they are not already generated.
 _C.TASK.MUST_LOOK_AT_TARG = True
 _C.TASK.DEBUG_GOAL_POINT = True
 _C.TASK.RENDER_TARGET = True
@@ -75,12 +78,12 @@ _C.TASK.DESIRED_RESTING_POSITION = []
 _C.TASK.USE_MARKER_T = True
 _C.TASK.SUCCESS_STATE = 0.0
 # Measurements for composite tasks.
-_C.TASK.REWARD_MEASUREMENT = "art_obj_reward"
-_C.TASK.SUCCESS_MEASUREMENT = "art_obj_success"
+_C.TASK.REWARD_MEASUREMENT = ""
+_C.TASK.SUCCESS_MEASUREMENT = ""
 # If true, does not care about navigability or collisions with objects when spawning
 # robot
 _C.TASK.EASY_INIT = False
-_C.TASK.FORCE_RECACHE = False
+_C.TASK.SHOULD_ENFORCE_TARGET_WITHIN_REACH = False
 # -----------------------------------------------------------------------------
 # # COMPOSITE TASK CONFIG
 # -----------------------------------------------------------------------------
@@ -97,6 +100,7 @@ _C.TASK.LIMIT_TASK_NODE = -1
 _C.TASK.LIMIT_TASK_LEN_SCALING = 0.0
 _C.TASK.DEBUG_SKIP_TO_NODE = -1
 _C.TASK.SKIP_NODES = ["move_obj"]
+_C.TASK.FILTER_NAV_TO_TASKS = []
 # -----------------------------------------------------------------------------
 # # ACTIONS
 # -----------------------------------------------------------------------------
@@ -230,7 +234,7 @@ _C.TASK.JOINT_VELOCITY_SENSOR = CN()
 _C.TASK.JOINT_VELOCITY_SENSOR.TYPE = "JointVelocitySensor"
 _C.TASK.JOINT_VELOCITY_SENSOR.DIMENSIONALITY = 7
 # -----------------------------------------------------------------------------
-# RESTING POSISITON SENSOR
+# RESTING POSITION SENSOR
 # -----------------------------------------------------------------------------
 _C.TASK.RESTING_POS_SENSOR = CN()
 _C.TASK.RESTING_POS_SENSOR.TYPE = "RestingPositionSensor"
@@ -285,6 +289,11 @@ _C.TASK.ABS_GOAL_SENSOR = CN()
 _C.TASK.ABS_GOAL_SENSOR.TYPE = "AbsGoalSensor"
 _C.TASK.ABS_GOAL_SENSOR.GOAL_FORMAT = "CARTESIAN"
 _C.TASK.ABS_GOAL_SENSOR.DIMENSIONALITY = 3
+# -----------------------------------------------------------------------------
+# DISTANCE TO NAVIGATION GOAL SENSOR
+# -----------------------------------------------------------------------------
+_C.TASK.DIST_TO_NAV_GOAL = CN()
+_C.TASK.DIST_TO_NAV_GOAL.TYPE = "DistToNavGoalSensor"
 
 # -----------------------------------------------------------------------------
 # SUCCESS MEASUREMENT
@@ -332,9 +341,11 @@ _C.TASK.COLLISIONS.TYPE = "Collisions"
 _C.TASK.ROBOT_FORCE = CN()
 _C.TASK.ROBOT_FORCE.TYPE = "RobotForce"
 _C.TASK.ROBOT_FORCE.MIN_FORCE = 20.0
+
 _C.TASK.FORCE_TERMINATE = CN()
 _C.TASK.FORCE_TERMINATE.TYPE = "ForceTerminate"
 _C.TASK.FORCE_TERMINATE.MAX_ACCUM_FORCE = -1.0
+
 _C.TASK.ROBOT_COLLS = CN()
 _C.TASK.ROBOT_COLLS.TYPE = "RobotCollisions"
 _C.TASK.OBJECT_TO_GOAL_DISTANCE = CN()
@@ -523,8 +534,12 @@ _C.SIMULATOR.AUTO_SLEEP = False
 _C.SIMULATOR.STEP_PHYSICS = True
 _C.SIMULATOR.UPDATE_ROBOT = True
 _C.SIMULATOR.CONCUR_RENDER = False
-_C.SIMULATOR.NEEDS_MARKERS = True
-_C.SIMULATOR.UPDATE_ROBOT = True
+_C.SIMULATOR.NEEDS_MARKERS = (
+    True  # If markers should be updated at every step.
+)
+_C.SIMULATOR.UPDATE_ROBOT = (
+    True  # If the robot camera positions should be updated at every step.
+)
 _C.SIMULATOR.SCENE = (
     "data/scene_datasets/habitat-test-scenes/van-gogh-room.glb"
 )
