@@ -54,11 +54,7 @@ class CausalSelfAttention(nn.Module):
         # causal mask to ensure that attention is only applied to the left in the input sequence
         self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
-        # self.register_buffer("mask", torch.tril(torch.ones(config.block_size + 1, config.block_size + 1))
-        #                              .view(1, 1, config.block_size + 1, config.block_size + 1))
         self.n_head = config.n_head
-
-        self.flag=1
 
     def forward(self, x, layer_past=None):
         B, T, C = x.size()
@@ -74,16 +70,6 @@ class CausalSelfAttention(nn.Module):
         # if attention_mask is not None: 
         #     att = att.masked_fill(attention_mask.repeat(T,self.n_head,1,1).transpose(0,2) == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
-        
-        # visualize attention
-        import matplotlib.pyplot as plt
-        if self.flag %1000 == 0:
-            fig, axs = plt.subplots(2,4)
-            for i in range(self.n_head):
-                axs[i//4, i%4].imshow(att[0,i].cpu().numpy(), cmap='hot')
-            fig.savefig('att.png', dpi=1200)
-            plt.close()
-        self.flag += 1
 
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -144,11 +130,9 @@ class GPT(nn.Module):
         # self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.head = nn.Linear(config.n_embd, 4, bias=False)
         self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
-        self.head_3 = nn.Linear(config.n_embd, 1, bias=False) # 4
-        self.head_value = nn.Linear(config.n_embd, 8, bias=False)
+        self.head_3 = nn.Linear(config.n_embd, 3, bias=False)
 
         self.apply(self._init_weights)
-        # self.head_value.weight.data.normal_(mean=0.0, std=1.0)
 
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
@@ -157,11 +141,11 @@ class GPT(nn.Module):
         if config.num_states[0] == 0:
             self.state_encoder = nn.Sequential(nn.Linear(config.num_states[1], config.n_embd), nn.Tanh())
         else:
-            self.state_encoder = nn.ModuleList([nn.Sequential(nn.Linear(i, config.n_embd//2), nn.Tanh()) for i in [14]])
+            self.state_encoder = nn.ModuleList([nn.Sequential(nn.Linear(i, config.n_embd//2), nn.Tanh()) for i in [16]])
 
         self.ret_emb = nn.Sequential(nn.Linear(1, config.n_embd), nn.Tanh())
 
-        self.action_embeddings = nn.Sequential(nn.Linear(config.vocab_size + 1, config.n_embd), nn.Tanh())
+        self.action_embeddings = nn.Sequential(nn.Linear(config.vocab_size, config.n_embd), nn.Tanh())
         nn.init.normal_(self.action_embeddings[0].weight, mean=0.0, std=0.02)
 
     def get_block_size(self):
@@ -234,7 +218,7 @@ class GPT(nn.Module):
         # attention_mask: (batch, block_size)
 
 
-        state_inputs = list(torch.split(states,[self.n_embd//2,14], -1))
+        state_inputs = list(torch.split(states,[self.n_embd//2,16], -1))
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
         # vision_embeddings = vision_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd//2) # (batch, block_size, n_embd)
 
@@ -286,7 +270,7 @@ class GPT(nn.Module):
         if actions is not None and self.model_type == 'reward_conditioned':
             logits_loc = self.head(x[:, (self.num_inputs-2)::self.num_inputs, :]) # only keep predictions from state_embeddings
             logits_arm = self.head_2(x[:, (self.num_inputs-2)::self.num_inputs, :])
-            logits_stop = self.head_3(x[:, (self.num_inputs-2)::self.num_inputs, :])
+            logits_pick = self.head_3(x[:, (self.num_inputs-2)::self.num_inputs, :])
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -299,15 +283,16 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.0)
+            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
             loss += F.mse_loss(logits_arm, targets[:,:,:8])
-            # loss += F.binary_cross_entropy_with_logits(logits_stop.squeeze(), torch.any(targets[:,:,:8]!=0, dim=-1).float().squeeze())
+            # loss = F.cross_entropy(logits_pick.permute(0,2,1), 3 * (targets[:,:,7] > 0) + (targets[:,:,7] < 0) + 2 * (targets[:,:,7] == 0) - 1)
+            # loss += F.binary_cross_entropy_with_logits(logits_pick, F.sigmoid(targets[:,:,7]).unsqueeze(-1))
 
         logits_loc = torch.argmax(logits_loc,dim=-1)
         logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)
-        logits[:,:,:8] = logits_arm
-        logits[:,:,8] = logits_loc == 1
-        logits[:,:,9] = logits_loc - 1
-        logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
-        logits[:,:,-1] = 0
+        # logits[:,:,:7] = logits_arm
+        # logits[:,:,8] = logits_loc == 1
+        # logits[:,:,9] = logits_loc - 1
+        # logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
+        # logits[:,:,-1] = 0
         return logits, loss

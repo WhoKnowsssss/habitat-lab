@@ -64,6 +64,8 @@ TASK:
         TYPE: OracleNavigationActionSensor
     NAV_GOAL_SENSOR:
         TYPE: NavGoalSensor
+    TARGET_START_POINT_GOAL_SENSOR:
+        TYPE: "TargetOrGoalStartPointGoalSensor"
     SENSORS:
     - TARGET_START_SENSOR
     - GOAL_SENSOR
@@ -78,6 +80,7 @@ TASK:
     - ABS_TARGET_START_SENSOR
     - LOCALIZATION_SENSOR
     - NAV_GOAL_SENSOR
+    - TARGET_START_POINT_GOAL_SENSOR
     EXCESSIVE_FORCE_SHOULD_END:
         TYPE: ForceTerminate
         MAX_ACCUM_FORCE: -1.0

@@ -39,7 +39,6 @@ class StateActionReturnDataset(Dataset):
         block_size = self.block_size
         done_idx = min(self.done_idxs[np.searchsorted(self.done_idxs, idx)], idx + block_size)
         idx = done_idx - block_size
-        # states = states / 255.
         
         if idx < 0:
             idx, done_idx = 0, block_size

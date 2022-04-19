@@ -80,20 +80,20 @@ def read_dataset(
 
             temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
 
-            idx = np.nonzero(temp_stepwise_returns[temp_done_idxs-1] < 90)[0]
-            if len(idx) > 0:
-                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[i-1] if i > 0 else 0, temp_done_idxs[i]) for i in idx])
+            # idx = np.nonzero(temp_stepwise_returns[temp_done_idxs-1] < 90)[0]
+            # if len(idx) > 0:
+            #     stepwise_idx = np.concatenate([np.arange(temp_done_idxs[i-1] if i > 0 else 0, temp_done_idxs[i]) for i in idx])
 
-                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
-                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
-                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
-                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+            #     temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+            #     temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+            #     temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+            #     temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
-            temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
+            # temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
 
             l = temp_done_idxs[1:] - temp_done_idxs[:-1]
             # debug
-            assert all(l <= 400), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
+            assert all(l <= 500), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
             # assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
             # print(f"file:  {file}  dn:  {temp_done_idxs}")
 

@@ -25,14 +25,14 @@ from habitat.tasks.nav.nav import (
 from habitat.tasks.nav.object_nav_task import ObjectGoalSensor
 from habitat_baselines.rl.ddppo.policy.resnet_policy import ResNetEncoder
 from habitat_baselines.rl.ddppo.policy import resnet
-from habitat_baselines.rl.ppo.policy import NetPolicy, Policy
+from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.transformer.transformer_model import GPTConfig, GPT
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.utils.common import get_num_actions
 
 
 @baseline_registry.register_policy
-class TransformerResNetPolicy(nn.Module, Policy):
+class TransformerResNetPolicy(Policy):
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -51,8 +51,6 @@ class TransformerResNetPolicy(nn.Module, Policy):
         fuse_keys: Optional[List[str]] = None,
         **kwargs
     ):
-        super().__init__()
-
         self.context_length = context_length
         
         if policy_config is not None:
@@ -68,7 +66,8 @@ class TransformerResNetPolicy(nn.Module, Policy):
             self.action_distribution_type = "categorical"
             include_visual_keys = None
 
-        self.net = TransformerResnetNet(
+        super().__init__(
+            net = TransformerResnetNet(
                 observation_space=observation_space,
                 action_space=action_space,  # for previous action
                 hidden_size=hidden_size,
@@ -84,7 +83,9 @@ class TransformerResNetPolicy(nn.Module, Policy):
                 discrete_actions=discrete_actions,
                 fuse_keys=fuse_keys,
                 include_visual_keys=include_visual_keys
-            )
+            ),
+            dim_actions= 11
+        )
 
     @classmethod
     def from_config(
@@ -103,7 +104,7 @@ class TransformerResNetPolicy(nn.Module, Policy):
             n_head=config.RL.TRANSFORMER.n_head,
             n_layer=config.RL.TRANSFORMER.n_layer,
             backbone=config.RL.TRANSFORMER.backbone,
-            normalize_visual_inputs="rgb" in observation_space.spaces,
+            normalize_visual_inputs=any(["rgb" in s for s in observation_space.spaces.keys()]),
             force_blind_policy=config.FORCE_BLIND_POLICY,
             policy_config=config.RL.POLICY,
             fuse_keys=config.RL.get("GYM_OBS_KEYS", None),
@@ -472,6 +473,6 @@ class TransformerResnetNet(Net):
             logits, loss = self.state_encoder(outs_, prev_actions_, targets=targets, rtgs=rtgs_, timesteps=timesteps)
 
         else:
-            logits, loss = self.state_encoder(outs, prev_actions_, targets=prev_actions_, rtgs=rtgs, timesteps=timesteps)
+            logits, loss = self.state_encoder(outs, prev_actions, targets=prev_actions, rtgs=rtgs, timesteps=timesteps)
 
         return logits, loss
