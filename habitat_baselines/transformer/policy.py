@@ -119,14 +119,7 @@ class TransformerResNetPolicy(Policy):
         timesteps=None,
         valid_context=None,
     ):
-        # block_size = self.net.get_block_size()
         self.net.eval()
-        # for _ in range(steps):
-        #     # x_cond = x if x.size(1) <= block_size else x[:, -block_size:] # crop context if needed
-        #     x_cond = observations if observations.size(1) <= block_size//3 else observations[:, -block_size//3:] # crop context if needed
-        #     if prev_actions is not None:
-        #         prev_actions = prev_actions if prev_actions.size(1) <= block_size//3 else prev_actions[:, -block_size//3:] # crop context if needed
-        #     rtgs = rtgs if rtgs.size(1) <= block_size//3 else rtgs[:, -block_size//3:] # crop context if needed
         logits, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
 
         logits = logits[range(logits.shape[0]), valid_context-1]

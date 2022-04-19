@@ -141,7 +141,7 @@ class GPT(nn.Module):
         if config.num_states[0] == 0:
             self.state_encoder = nn.Sequential(nn.Linear(config.num_states[1], config.n_embd), nn.Tanh())
         else:
-            self.state_encoder = nn.ModuleList([nn.Sequential(nn.Linear(i, config.n_embd//2), nn.Tanh()) for i in [16]])
+            self.state_encoder = nn.ModuleList([nn.Sequential(nn.Linear(i, config.n_embd//2), nn.Tanh()) for i in [config.num_states[1]]])
 
         self.ret_emb = nn.Sequential(nn.Linear(1, config.n_embd), nn.Tanh())
 
@@ -218,7 +218,7 @@ class GPT(nn.Module):
         # attention_mask: (batch, block_size)
 
 
-        state_inputs = list(torch.split(states,[self.n_embd//2,16], -1))
+        state_inputs = list(torch.split(states,[self.n_embd//2,self.config.num_states[1]], -1))
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
         # vision_embeddings = vision_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd//2) # (batch, block_size, n_embd)
 
