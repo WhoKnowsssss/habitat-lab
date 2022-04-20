@@ -290,9 +290,12 @@ class GPT(nn.Module):
 
         logits_loc = torch.argmax(logits_loc,dim=-1)
         logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)
-        # logits[:,:,:7] = logits_arm
-        # logits[:,:,8] = logits_loc == 1
-        # logits[:,:,9] = logits_loc - 1
-        # logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
-        # logits[:,:,-1] = 0
+        logits[:,:,:8] = logits_arm
+        # logits[:,:,7:8] = logits_pick
+        # logits[:,:,7] = torch.argmax(logits_pick, dim=-1) - 1
+        logits[:,:,7] = logits[:,:,7] - 0.1
+        logits[:,:,8] = logits_loc == 1
+        logits[:,:,9] = logits_loc - 1
+        logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
+        logits[:,:,-1] = 0
         return logits, loss

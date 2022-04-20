@@ -4,6 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import copy
 import numpy as np
 from gym import spaces
 
@@ -78,7 +79,7 @@ class TargetStartSensor(MultiObjSensor):
         self._sim: RearrangeSim
         global_T = self._sim.robot.ee_transform
         T_inv = global_T.inverted()
-        pos = self._sim.get_target_objs_start()
+        pos = copy.deepcopy(self._sim.get_target_objs_start())
         for i in range(pos.shape[0]):
             pos[i] = T_inv.transform_point(pos[i])
 

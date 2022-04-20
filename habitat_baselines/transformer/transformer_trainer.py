@@ -11,6 +11,9 @@ import time
 from collections import defaultdict, deque
 from typing import Any, ClassVar, Dict, List, Tuple, Union, Optional
 
+from matplotlib import pyplot as plt
+import wandb
+
 
 import numpy as np
 import torch
@@ -69,6 +72,7 @@ from habitat_baselines.utils.common import (
     is_continuous_action_space,
 )
 from habitat_baselines.utils.env_utils import construct_envs
+from habitat_baselines.utils.render_wrapper import overlay_frame
 
 
 @baseline_registry.register_trainer(name="transformer")
@@ -304,52 +308,6 @@ class TransformerTrainer(BaseRLTrainer):
         self.pth_time = 0.0
         self.t_start = time.time()
 
-    # def init_distributed(self, find_unused_params: bool = True) -> None:
-    #     r"""Initializes distributed training for the model
-
-    #     1. Broadcasts the model weights from world_rank 0 to all other workers
-    #     2. Adds gradient hooks to the model
-
-    #     :param find_unused_params: Whether or not to filter out unused parameters
-    #                                before gradient reduction.  This *must* be True if
-    #                                there are any parameters in the model that where unused in the
-    #                                forward pass, otherwise the gradient reduction
-    #                                will not work correctly.
-    #     """
-    #     class _EvalActionsWrapper(torch.nn.Module):
-    #         r"""Wrapper on evaluate_actions that allows that to be called from forward.
-    #         This is needed to interface with DistributedDataParallel's forward call
-    #         """
-
-    #         def __init__(self, transformer_policy):
-    #             super().__init__()
-    #             self.transformer_policy = transformer_policy
-
-    #         def forward(self, *args, **kwargs):
-    #             return self.transformer_policy.evaluate_actions(*args, **kwargs)
-        
-    #     # NB: Used to hide the hooks from the nn.Module,
-    #     # so they don't show up in the state_dict
-    #     class Guard:  # noqa: SIM119
-    #         def __init__(self, model, device):
-    #             if torch.cuda.is_available():
-    #                 self.ddp = torch.nn.parallel.DistributedDataParallel(
-    #                     model,
-    #                     device_ids=[device],
-    #                     output_device=device,
-    #                     find_unused_parameters=find_unused_params,
-    #                 )
-    #             else:
-    #                 self.ddp = torch.nn.parallel.DistributedDataParallel(
-    #                     model,
-    #                     find_unused_parameters=find_unused_params,
-    #                 )
-
-    #         def __call__(self, observations, rnn_hidden_states, prev_actions, masks, action):
-    #             return self.ddp(observations, rnn_hidden_states, prev_actions, masks, action)
-
-    #     self._evaluate_actions_wrapper = Guard(_EvalActionsWrapper(self.transformer_policy), self.device)  # type: ignore
-
     def init_distributed(self, find_unused_params: bool = True) -> None:
 
         if torch.cuda.is_available():
@@ -509,68 +467,11 @@ class TransformerTrainer(BaseRLTrainer):
     def _training_log(
         self, writer, losses: Dict[str, float], prev_time: int = 0
     ):
-        # deltas = {
-        #     k: (
-        #         (v[-1] - v[0]).sum().item()
-        #         if len(v) > 1
-        #         else v[0].sum().item()
-        #     )
-        #     for k, v in self.window_episode_stats.items()
-        # }
-        # deltas["count"] = max(deltas["count"], 1.0)
-
-        # writer.add_scalar(
-        #     "reward",
-        #     deltas["reward"] / deltas["count"],
-        #     self.num_updates_done,
-        # )
-
-        # # Check to see if there are any metrics
-        # # that haven't been logged yet
-        # metrics = {
-        #     k: v / deltas["count"]
-        #     for k, v in deltas.items()
-        #     if k not in {"reward", "count"}
-        # }
-        # if len(metrics) > 0:
-        #     writer.add_scalars("metrics", metrics, self.num_updates_done)
-
         writer.add_scalars(
             "losses",
             losses,
             self.num_updates_done,
         )
-
-        # log stats
-        # if self.num_updates_done % self.config.LOG_INTERVAL == 0:
-        #     logger.info(
-        #         "update: {}\tfps: {:.3f}\t".format(
-        #             self.num_updates_done,
-        #             self.num_updates_done
-        #             / ((time.time() - self.t_start) + prev_time),
-        #         )
-        #     )
-
-        #     logger.info(
-        #         "update: {}\tenv-time: {:.3f}s\tpth-time: {:.3f}s\t"
-        #         "frames: {}".format(
-        #             self.num_updates_done,
-        #             self.env_time,
-        #             self.pth_time,
-        #             self.num_updates_done,
-        #         )
-        #     )
-
-        #     logger.info(
-        #         "Average window size: {}  {}".format(
-        #             len(self.window_episode_stats["count"]),
-        #             "  ".join(
-        #                 "{}: {:.3f}".format(k, v / deltas["count"])
-        #                 for k, v in deltas.items()
-        #                 if k != "count"
-        #             ),
-        #         )
-        #     )
 
     def _run_epoch(
         self, 
@@ -770,6 +671,8 @@ class TransformerTrainer(BaseRLTrainer):
         config.TASK_CONFIG.DATASET.SPLIT = config.EVAL.SPLIT
         config.freeze()
 
+        self.split = config.TASK_CONFIG.DATASET.SPLIT
+
         if (
             len(self.config.VIDEO_OPTION) > 0
             and self.config.VIDEO_RENDER_TOP_DOWN
@@ -886,29 +789,26 @@ class TransformerTrainer(BaseRLTrainer):
         pbar = tqdm(total=number_of_eval_episodes)
         self.transformer_policy.eval()
 
-        name_list = list(range(10,110,10))
+        name_list = list(range(10,100,10))
         name_list.reverse()
         name__ = name_list.pop()
-        gt = torch.load('data/temp_data/{}.pt'.format(name__), map_location=torch.device('cpu'))
+        gt = torch.load('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__), map_location=torch.device('cpu'))
         self.gt_actions = gt["actions"]
         self.gt_observations = gt["obs"]
-        obs_fix = []
+        self.gt_reward = gt["rewards"]
+        self.gt_infos = gt["infos"]
+        self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
+        self.gt_episodes = list(set(self.gt_episodes))
+        total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
         idxxx=0
+        idx22=0
+        success_rates = {'overall': 0, 'nav_fail': 0, 'pick_fail': 0}
 
-            
         while (
             len(stats_episodes) < number_of_eval_episodes
             and self.envs.num_envs > 0
         ):
             current_episodes = self.envs.current_episodes()
-
-
-            batch_list2 = self.gt_observations[max(0,idxxx+1-30):idxxx+1]
-            for k in batch_list2[0].keys():
-                batch_list2[-1][k] = batch_list2[-1][k].to(prev_actions.device).unsqueeze(0)
-                print(torch.sum(torch.abs(batch_list2[-1][k] - batch_list[-1][k])))
-                # batch_list[i]['robot_head_depth'] = batch_list[i]['robot_head_depth']
-            # batch_list = batch_list2
             with torch.no_grad(): 
                 actions = self.transformer_policy.act(
                     batch_list,
@@ -918,28 +818,7 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps=timesteps,
                     valid_context=valid_context,
                 )
-            print(actions)
-            if idxxx < 0:
-                pass
-                actions = torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
-            else:
-                pass
-                # gt["obs_fix"] = obs_fix
-                # torch.save(gt, 'data/temp_data/{}_fix.pt'.format(name__))
-                # name__ = name_list.pop()
-                # gt = torch.load('data/temp_data/{}.pt'.format(name__), map_location=torch.device('cpu'))
-                # self.gt_actions = gt["actions"]
-                # self.gt_observations = gt["obs"]
-                # idxxx = 0
-                # obs_fix = []
-                # continue
-            differnce = actions - torch.tensor(self.gt_actions[idxxx], device=prev_actions.device).unsqueeze(0)
-            print(differnce, self.gt_actions[idxxx])
-            gt_observations = self.gt_observations[idxxx]
-            # print(gt_observations['robot_head_depth'] - observations[0]['robot_head_depth'])
-            idxxx += 1
-            # if timesteps[0,0,0].item() == 49:
-            #     print()
+
             prev_actions = torch.cat((prev_actions[:,1:,:], actions.unsqueeze(1)), dim=1)  # type: ignore
             # NB: Move actions to CPU.  If CUDA tensors are
             # sent in to env.step(), that will create CUDA contexts
@@ -956,11 +835,38 @@ class TransformerTrainer(BaseRLTrainer):
 
             outputs = self.envs.step(step_data)
 
+            if self.split == 'eval' and current_episodes[0].episode_id == self.gt_infos[idxxx]["episode"]:  
+                total__["obs"].append(torch.sum(torch.abs(self.gt_observations[idxxx]["robot_head_rgb"] - observations[0]["robot_head_rgb"])/255).numpy())
+                total__["actions"].append((self.gt_actions[idxxx][8].numpy(), actions[0][8].cpu().numpy(), self.gt_actions[idxxx][9].numpy(), actions[0][9].cpu().numpy()))
+                total__["step"].append(idx22)     
+                idx22 += 1
+
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
 
-            obs_fix.append(observations[0])
+            # print(observations[0]['object_to_agent_gps_compass'])
+            # print(observations[0]['obj_start_sensor'])
+            print(idxxx)
+            
+            if torch.all(actions[0][8:10] == 0):
+                total__["pick_reward"] += rewards_l[0]
+            else:
+                total__["nav_reward"] += rewards_l[0]
+            if self.split == 'eval' and current_episodes[0].episode_id == self.gt_infos[idxxx]["episode"]:  
+                total__["rewards"].append((self.gt_reward[idxxx+1].numpy(), rewards_l[0]))
+                gt_dist=torch.sqrt(torch.sum(torch.square(self.gt_observations[idxxx+1]["obj_start_sensor"]))).numpy()
+                total__["gt_dist"].append(gt_dist)
+
+                gt_dist=self.gt_observations[idxxx+1]["object_to_agent_gps_compass"].numpy()
+                total__["gt_base_dist"].append(gt_dist)
+                idxxx += 1 
+
+            pol_dist = np.sqrt(np.sum(np.square(observations[0]['obj_start_sensor'])))
+            total__["dist"].append(pol_dist)
+            pol_dist=observations[0]['object_to_agent_gps_compass']
+            total__["base_dist"].append(pol_dist)
+
 
             batch = batch_obs(
                 observations,
@@ -1020,16 +926,142 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps[i,0,0] = 0
                     rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
 
+                    if self.split == 'eval':
+                        gt_ = np.array([total__["gt_dist"][i] for i in range(len(total__["gt_dist"]))])
+                        policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
+                        plt.figure()
+                        plt.plot(gt_, 'r')
+                        plt.plot(policy, 'b')
+                        wandb.log({"episode_Dist_to_obj": plt}, step=len(stats_episodes))
+
+                        gt_ = np.array([total__["gt_base_dist"][i] for i in range(len(total__["gt_dist"]))])
+                        policy = np.array([total__["base_dist"][i] for i in range(len(total__["dist"]))])
+                        plt.figure()
+                        plt.plot(gt_, 'r')
+                        plt.plot(policy, 'b')
+                        wandb.log({"episode_Base_dist_to_obj": plt}, step=len(stats_episodes))
+
+                        gt_ = np.array([total__["actions"][i][0].tolist() for i in range(len(total__["gt_dist"]))])
+                        policy = np.array([total__["actions"][i][1].tolist() for i in range(len(total__["gt_dist"]))])
+                        plt.figure()
+                        plt.plot(total__["step"], gt_, 'ro', alpha=0.5)
+                        plt.plot(total__["step"], policy, 'b+', alpha=0.5)
+                        wandb.log({"episode_Action_Forward": plt}, step=len(stats_episodes))
+
+                        gt_ = np.array([total__["actions"][i][2].tolist() for i in range(len(total__["gt_dist"]))])
+                        policy = np.array([total__["actions"][i][3].tolist() for i in range(len(total__["gt_dist"]))])
+                        plt.figure()
+                        plt.plot(total__["step"], gt_, 'ro', alpha=0.5)
+                        plt.plot(total__["step"], policy, 'b+', alpha=0.5)
+                        wandb.log({"episode_Action_Turn": plt}, step=len(stats_episodes))
+
+                        gt_ = np.array([total__["rewards"][i][0] for i in range(len(total__["gt_dist"]))]).reshape(-1)
+                        policy = np.array([total__["rewards"][i][1] for i in range(len(total__["gt_dist"]))])
+                        gt_ = np.array([np.sum(gt_[:i+1]) for i in range(len(gt_))])
+                        policy = np.array([np.sum(policy[:i+1]) for i in range(len(policy))])
+                        plt.figure()
+                        plt.plot(total__["step"], gt_, 'r')
+                        plt.plot(total__["step"], policy, 'b')
+                        wandb.log({"episode_Reward": plt}, step=len(stats_episodes))
+                        if len(gt_) and gt_[-1] > 100:
+                            writer.add_scalars(
+                                "Metrics", 
+                                {"w/ expert success": episode_stats['composite_success']},
+                                len(stats_episodes)
+                            )
+
+                        gt_ = np.array([total__["obs"][i] for i in range(len(total__["gt_dist"]))]).squeeze()
+                        plt.figure()
+                        plt.plot(total__["step"], gt_)
+                        wandb.log({"episode_Obs": plt}, step=len(stats_episodes))
+
+                    else:
+                        policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
+                        plt.figure()
+                        plt.plot(np.arange(len(policy)), policy, 'b')
+                        wandb.log({"episode_Dist_to_obj": plt}, step=len(stats_episodes))
+
+                        policy = np.array([total__["base_dist"][i] for i in range(len(total__["dist"]))])
+                        plt.figure()
+                        plt.plot(np.arange(len(policy)), policy, 'b')
+                        wandb.log({"episode_Base_dist_to_obj": plt}, step=len(stats_episodes))
+
+                    writer.add_scalars(
+                        "Metrics", 
+                        {"Nav_Reward": total__["nav_reward"]},
+                        len(stats_episodes)
+                    )
+
+                    writer.add_scalars(
+                        "Metrics", 
+                        {"Pick_Reward": total__["pick_reward"]},
+                        len(stats_episodes)
+                    )
+
+                    writer.add_scalars(
+                        "Metrics", 
+                        {"Overall_Reward": total__["pick_reward"] + total__["nav_reward"]},
+                        len(stats_episodes)
+                    )
+
+                    if episode_stats['composite_success']:
+                        success_rates["overall"] += 1
+                    else:
+                        if min([total__["base_dist"][i][0] for i in range(len(total__["dist"]))]) > 1.0:
+                            success_rates["nav_fail"] += 1
+                        elif min([total__["dist"][i] for i in range(len(total__["dist"]))]) > 0.15:
+                            success_rates["pick_fail"] += 1
                     
+                    writer.add_scalars(
+                        "Metrics", 
+                        {"Overall Success" :success_rates["overall"] / len(stats_episodes)},
+                        len(stats_episodes)
+                    )
+
+                    if (len(stats_episodes) - success_rates["overall"] ) != 0:
+                        writer.add_scalars(
+                            "Metrics", 
+                            {"Pick Fail Rate" :success_rates["pick_fail"] / (len(stats_episodes) - success_rates["overall"] )},
+                            len(stats_episodes)
+                        )
+
+                        writer.add_scalars(
+                            "Metrics", 
+                            {"Nav Fail Rate" :success_rates["nav_fail"] / (len(stats_episodes) - success_rates["overall"] )},
+                            len(stats_episodes)
+                        )
+
+                        writer.add_scalars(
+                            "Metrics", 
+                            {"Other Fail Rate" :(len(stats_episodes) - success_rates["overall"] - success_rates["nav_fail"] - success_rates["pick_fail"]) / (len(stats_episodes) - success_rates["overall"] )},
+                            len(stats_episodes)
+                        )
+
+                    total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
+                    idx22=0
+
+                    if not next_episodes[i].episode_id in self.gt_episodes:
+                        name__ = name_list.pop()
+                        gt = torch.load('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__), map_location=torch.device('cpu'))
+                        self.gt_actions = gt["actions"]
+                        self.gt_observations = gt["obs"]
+                        self.gt_reward = gt["rewards"]
+                        self.gt_infos = gt["infos"]
+                        self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
+                        self.gt_episodes = list(set(self.gt_episodes))
+                        total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
+                        idxxx=0
+
                     if len(self.config.VIDEO_OPTION) > 0:
                         generate_video(
                             video_option=self.config.VIDEO_OPTION,
                             video_dir=self.config.VIDEO_DIR,
                             images=rgb_frames[i],
-                            episode_id=current_episodes[i].episode_id,
+                            episode_id=current_episodes[i].episode_id + "_{}".format(len(stats_episodes)),
                             checkpoint_idx=checkpoint_index,
                             metrics=self._extract_scalars_from_info(infos[i]),
                             tb_writer=writer,
+                            keys_to_include_in_name=self.config.EVAL_KEYS_TO_INCLUDE_IN_NAME
                         )
 
                         rgb_frames[i] = []
@@ -1054,6 +1086,8 @@ class TransformerTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
+                    if self.config.VIDEO_RENDER_ALL_INFO:
+                        frame = overlay_frame(frame, infos[i])
                     rgb_frames[i].append(frame)
 
             not_done_masks = not_done_masks.to(device=self.device)
@@ -1098,6 +1132,12 @@ class TransformerTrainer(BaseRLTrainer):
         step_id = checkpoint_index
         if "extra_state" in ckpt_dict and "step" in ckpt_dict["extra_state"]:
             step_id = ckpt_dict["extra_state"]["step"]
+
+        writer.add_scalars(
+            "eval_reward",
+            {"average reward": aggregated_stats["reward"]},
+            step_id,
+        )
 
         writer.add_scalars(
             "eval_reward",

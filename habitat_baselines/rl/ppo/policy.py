@@ -33,30 +33,30 @@ class Policy(nn.Module, metaclass=abc.ABCMeta):
         self.dim_actions = dim_actions
         self.action_distribution: Union[CategoricalNet, GaussianNet]
 
-        if policy_config is None:
-            self.action_distribution_type = "categorical"
-        else:
-            self.action_distribution_type = (
-                policy_config.action_distribution_type
-            )
+        # if policy_config is None:
+        #     self.action_distribution_type = "categorical"
+        # else:
+        #     self.action_distribution_type = (
+        #         policy_config.action_distribution_type
+        #     )
 
-        if self.action_distribution_type == "categorical":
-            self.action_distribution = CategoricalNet(
-                self.net.output_size, self.dim_actions
-            )
-        elif self.action_distribution_type == "gaussian":
-            self.action_distribution = GaussianNet(
-                self.net.output_size,
-                self.dim_actions,
-                policy_config.ACTION_DIST,
-            )
-        else:
-            ValueError(
-                f"Action distribution {self.action_distribution_type}"
-                "not supported."
-            )
+        # if self.action_distribution_type == "categorical":
+        #     self.action_distribution = CategoricalNet(
+        #         self.net.output_size, self.dim_actions
+        #     )
+        # elif self.action_distribution_type == "gaussian":
+        #     self.action_distribution = GaussianNet(
+        #         self.net.output_size,
+        #         self.dim_actions,
+        #         policy_config.ACTION_DIST,
+        #     )
+        # else:
+        #     ValueError(
+        #         f"Action distribution {self.action_distribution_type}"
+        #         "not supported."
+        #     )
 
-        self.critic = CriticHead(self.net.output_size)
+        # self.critic = CriticHead(self.net.output_size)
 
     @property
     def should_load_agent_state(self):

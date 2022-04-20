@@ -463,8 +463,7 @@ class TransformerResnetNet(Net):
                 rtgs_[i,:current_context[i],:] = rtgs[i,-current_context[i]:,:]
                 prev_actions_[i,:current_context[i],:] = prev_actions[i,-current_context[i]:,:]
                 outs_[i,:current_context[i],:] = outs[i,-current_context[i]:,:]
-            logits, loss = self.state_encoder(outs_, prev_actions_, targets=targets, rtgs=rtgs_, timesteps=timesteps)
-
+            logits, loss = self.state_encoder(outs_, prev_actions_, rtgs=rtgs_, timesteps=timesteps)
         else:
             logits, loss = self.state_encoder(outs, prev_actions, targets=prev_actions, rtgs=rtgs, timesteps=timesteps)
 
