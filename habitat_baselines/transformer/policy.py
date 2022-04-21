@@ -291,7 +291,28 @@ class TransformerResnetNet(Net):
                 {
                     k: v
                     for k, v in observation_space.spaces.items()
-                    if k in self.include_visual_keys
+                    if k in ['robot_head_depth']
+                }
+            )
+        else:
+            use_obs_space = observation_space
+            
+        self.visual_encoder_depth = ResNetEncoder(
+            use_obs_space,
+            baseplanes=resnet_baseplanes,
+            ngroups=resnet_baseplanes // 2,
+            make_backbone=getattr(resnet, backbone),
+            normalize_visual_inputs=normalize_visual_inputs,
+        )
+
+        if force_blind_policy:
+            use_obs_space = spaces.Dict({})
+        elif self.include_visual_keys is not None and len(self.include_visual_keys) != 0:
+            use_obs_space = spaces.Dict(
+                {
+                    k: v
+                    for k, v in observation_space.spaces.items()
+                    if k in ['robot_head_rgb']
                 }
             )
         else:
@@ -306,6 +327,13 @@ class TransformerResnetNet(Net):
         )
 
         if not self.visual_encoder.is_blind:
+            self.visual_fc_depth = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(
+                    np.prod(self.visual_encoder.output_shape), hidden_size
+                ),
+                nn.ReLU(True),
+            )
             self.visual_fc = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(
@@ -339,12 +367,16 @@ class TransformerResnetNet(Net):
         outs = []
         for observations in observations_list:
             x = []
+            
             if not self.is_blind:
                 if "visual_features" in observations:
                     visual_feats = observations["visual_features"]
                 else:
-                    visual_feats = self.visual_encoder(observations)
+                    visual_feats = self.visual_encoder_depth(observations)
 
+                visual_feats = self.visual_fc_depth(visual_feats)
+                x.append(visual_feats)
+                visual_feats = self.visual_encoder(observations)
                 visual_feats = self.visual_fc(visual_feats)
                 x.append(visual_feats)
 
