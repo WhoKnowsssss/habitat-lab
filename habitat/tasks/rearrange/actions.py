@@ -24,7 +24,7 @@ from habitat.tasks.rearrange.grip_actions import (
     SuctionGraspAction,
 )
 from habitat.tasks.rearrange.rearrange_sim import RearrangeSim
-from habitat.tasks.rearrange.utils import logger, rearrange_collision
+from habitat.tasks.rearrange.utils import rearrange_collision, rearrange_logger
 
 
 @registry.register_task_action
@@ -52,11 +52,15 @@ class EmptyAction(SimulatorTaskAction):
 
 @registry.register_task_action
 class RearrangeStopAction(SimulatorTaskAction):
+    def reset(self, *args, **kwargs):
+        super().reset(*args, **kwargs)
+        self.does_want_terminate = False
+
     def step(self, task, *args, is_last_action, **kwargs):
         should_stop = kwargs.get("REARRANGE_STOP", [1.0])
         if should_stop[0] == 1.0:
-            logger.info("Requesting episode stop.")
-            task.should_end = True
+            rearrange_logger.debug("Requesting episode stop.")
+            self.does_want_terminate = True
 
         if is_last_action:
             return self._sim.step(HabitatSimActions.REARRANGE_STOP)
@@ -298,8 +302,7 @@ class BaseVelAction(SimulatorTaskAction):
 
     def step(self, base_vel, *args, is_last_action, **kwargs):
         lin_vel, ang_vel = base_vel
-        lin_vel = np.clip(lin_vel, -1, 1)
-        lin_vel *= self._config.LIN_SPEED
+        lin_vel = np.clip(lin_vel, -1, 1) * self._config.LIN_SPEED
         ang_vel = np.clip(ang_vel, -1, 1) * self._config.ANG_SPEED
         if not self._config.ALLOW_BACK:
             lin_vel = np.maximum(lin_vel, 0)

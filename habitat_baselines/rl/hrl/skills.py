@@ -15,14 +15,12 @@ from habitat.tasks.rearrange.rearrange_sensors import (
     RelativeRestingPositionSensor,
 )
 from habitat.tasks.rearrange.sub_tasks.nav_to_obj_sensors import (
-    DistToNavGoalSensor,
     NavGoalSensor,
-    NavRotToGoalSensor,
     OracleNavigationActionSensor,
 )
 from habitat.tasks.utils import get_angle
 from habitat_baselines.common.baseline_registry import baseline_registry
-from habitat_baselines.common.logging import logger
+from habitat_baselines.common.logging import baselines_logger
 from habitat_baselines.common.tensor_dict import TensorDict
 from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.utils.common import get_num_actions
@@ -39,45 +37,159 @@ def truncate_obs_space(space: spaces.Box, truncate_len: int) -> spaces.Box:
     )
 
 
-class NnSkillPolicy(Policy):
+class SkillPolicy(Policy):
     def __init__(
         self,
-        wrap_policy,
         config,
-        action_space,
-        filtered_obs_space,
-        filtered_action_space,
+        action_space: spaces.Space,
         batch_size,
+        should_keep_hold_state: bool = False,
     ):
-        self._wrap_policy = wrap_policy
+        """
+        :param action_space: The overall action space of the entire task, not task specific.
+        """
         self._action_space = action_space
         self._config = config
         self._batch_size = batch_size
-        self._filtered_obs_space = filtered_obs_space
-        self._filtered_action_space = filtered_action_space
-        self._ac_start = 0
-        self._ac_len = get_num_actions(filtered_action_space)
 
         self._cur_skill_step = torch.zeros(self._batch_size)
+        self._should_keep_hold_state = should_keep_hold_state
 
         self._cur_skill_args: List[Any] = [
             None for _ in range(self._batch_size)
         ]
 
-        for k in action_space:
-            if k not in filtered_action_space.spaces.keys():
-                self._ac_start += get_num_actions(action_space[k])
+        self._grip_ac_idx = 0
+        found_grip = False
+        for k, space in action_space.items():
+            if k != "ARM_ACTION":
+                self._grip_ac_idx += get_num_actions(space)
             else:
+                # The last actioin in the arm action is the grip action.
+                self._grip_ac_idx += get_num_actions(space) - 1
+                found_grip = True
                 break
-
-        self._internal_log(
-            f"Skill {self._config.skill_name}: action offset {self._ac_start}, action length {self._ac_len}"
-        )
+        if not found_grip:
+            raise ValueError(f"Could not find grip action in {action_space}")
 
     def _internal_log(self, s, observations=None):
-        logger.info(
-            f"Skill {self._config.skill_name} @ {self._cur_skill_step}: {s}"
+        baselines_logger.debug(
+            f"Skill {self._config.skill_name} @ step {self._cur_skill_step}: {s}"
         )
+
+    def _get_multi_sensor_index(self, batch_idx: int, sensor_name: str) -> int:
+        """
+        Gets the index to select the observation object index in `_select_obs`.
+        Used when there are multiple possible goals in the scene, such as
+        multiple objects to possibly rearrange.
+        """
+        return self._cur_skill_args[batch_idx]
+
+    def _keep_holding_state(
+        self, full_action: torch.Tensor, observations
+    ) -> torch.Tensor:
+        """
+        Makes the action so it does not result in dropping or picking up an
+        object. Used in navigation and other skills which are not supposed to
+        interact through the gripper.
+        """
+        # Keep the same grip state as the previous action.
+        is_holding = observations[IsHoldingSensor.cls_uuid].view(-1)
+        # If it is not holding (0) want to keep releasing -> output -1.
+        # If it is holding (1) want to keep grasping -> output +1.
+        full_action[:, self._grip_ac_idx] = is_holding + (is_holding - 1.0)
+        return full_action
+
+    def should_terminate(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        :returns: A (batch_size,) size tensor where 1 indicates the skill wants to end and 0 if not.
+        """
+        is_skill_done = self._is_skill_done(
+            observations, rnn_hidden_states, prev_actions, masks
+        )
+        if is_skill_done:
+            self._internal_log(
+                "Requested skill termination",
+                observations,
+            )
+
+        if self._config.MAX_SKILL_STEPS > 0:
+            bad_terminate = self._cur_skill_step > self._config.MAX_SKILL_STEPS
+        else:
+            bad_terminate = torch.zeros(
+                self._cur_skill_step.shape, device=self._cur_skill_step.device
+            )
+        if bad_terminate.sum() > 0:
+            self._internal_log(
+                f"Bad terminating due to timeout {self._cur_skill_step}, {bad_terminate}",
+                observations,
+            )
+
+        return is_skill_done, bad_terminate
+
+    def on_enter(
+        self,
+        skill_arg: List[str],
+        batch_idx: int,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Passes in the data at the current `batch_idx`
+        :returns: The new hidden state and prev_actions ONLY at the batch_idx.
+        """
+        self._cur_skill_step[batch_idx] = 0
+        self._cur_skill_args[batch_idx] = self._parse_skill_arg(skill_arg)
+
+        self._internal_log(
+            f"Entering skill with arguments {skill_arg} parsed to {self._cur_skill_args[batch_idx]}",
+            observations,
+        )
+
+        return (
+            rnn_hidden_states[batch_idx] * 0.0,
+            prev_actions[batch_idx] * 0.0,
+        )
+
+    @classmethod
+    def from_config(cls, config, observation_space, action_space, batch_size):
+        return cls(config, action_space, batch_size)
+
+    def act(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+        cur_batch_idx,
+        deterministic=False,
+    ):
+        """
+        :returns: Predicted action and next rnn hidden state.
+        """
+        self._cur_skill_step[cur_batch_idx] += 1
+        action, hxs = self._internal_act(
+            observations,
+            rnn_hidden_states,
+            prev_actions,
+            masks,
+            cur_batch_idx,
+            deterministic,
+        )
+
+        if self._should_keep_hold_state:
+            action = self._keep_holding_state(action, observations)
+        return action, hxs
+
+    def to(self, device):
+        self._cur_skill_step = self._cur_skill_step.to(device)
 
     def _select_obs(self, obs, cur_batch_idx):
         """
@@ -94,36 +206,6 @@ class NnSkillPolicy(Policy):
             entity_positions = obs[k].view(1, -1, 3)
             obs[k] = entity_positions[:, cur_multi_sensor_index]
         return obs
-
-    def _get_multi_sensor_index(self, batch_idx: int, sensor_name: str) -> int:
-        """
-        Gets the index to select the observation object index in `_select_obs`.
-        Used when there are multiple possible goals in the scene, such as
-        multiple objects to possibly rearrange.
-        """
-        return self._cur_skill_args[batch_idx]
-
-    def should_terminate(
-        self,
-        observations,
-        rnn_hidden_states,
-        prev_actions,
-        masks,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        :returns: A (batch_size,) size tensor where 1 indicates the skill wants to end and 0 if not.
-        """
-        is_skill_done = self._is_skill_done(
-            observations, rnn_hidden_states, prev_actions, masks
-        )
-        bad_terminate = self._cur_skill_step > self._config.MAX_SKILL_STEPS
-        if bad_terminate.sum() > 0:
-            self._internal_log(
-                f"Bad terminating due to timeout {self._cur_skill_step}, {bad_terminate}",
-                observations,
-            )
-
-        return is_skill_done, bad_terminate
 
     def _is_skill_done(
         self,
@@ -143,29 +225,53 @@ class NnSkillPolicy(Policy):
         """
         return skill_arg
 
-    def on_enter(
+    def _internal_act(
         self,
-        skill_arg: List[str],
-        batch_idx: int,
         observations,
         rnn_hidden_states,
         prev_actions,
+        masks,
+        cur_batch_idx,
+        deterministic=False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        raise NotImplementedError()
+
+
+class NnSkillPolicy(SkillPolicy):
+    """
+    Defines a skill to be used in the TP+SRL baseline.
+    """
+
+    def __init__(
+        self,
+        wrap_policy,
+        config,
+        action_space: spaces.Space,
+        filtered_obs_space: spaces.Space,
+        filtered_action_space: spaces.Space,
+        batch_size,
+        should_keep_hold_state: bool = False,
+    ):
         """
-        Passes in the data at the current `batch_idx`
-        :returns: The new hidden state and prev_actions ONLY at the batch_idx.
+        :param action_space: The overall action space of the entire task, not task specific.
         """
-        self._cur_skill_args[batch_idx] = self._parse_skill_arg(skill_arg)
-        self._internal_log(
-            f"Entering skill with arguments {skill_arg} parsed to {self._cur_skill_args[batch_idx]}",
-            observations,
+        super().__init__(
+            config, action_space, batch_size, should_keep_hold_state
         )
+        self._wrap_policy = wrap_policy
+        self._filtered_obs_space = filtered_obs_space
+        self._filtered_action_space = filtered_action_space
+        self._ac_start = 0
+        self._ac_len = get_num_actions(filtered_action_space)
 
-        self._cur_skill_step[batch_idx] = 0
+        for k, space in action_space.items():
+            if k not in filtered_action_space.spaces.keys():
+                self._ac_start += get_num_actions(space)
+            else:
+                break
 
-        return (
-            rnn_hidden_states[batch_idx] * 0.0,
-            prev_actions[batch_idx] * 0.0,
+        self._internal_log(
+            f"Skill {self._config.skill_name}: action offset {self._ac_start}, action length {self._ac_len}"
         )
 
     def parameters(self):
@@ -182,9 +288,9 @@ class NnSkillPolicy(Policy):
             return 0
 
     def to(self, device):
+        super().to(device)
         if self._wrap_policy is not None:
             self._wrap_policy.to(device)
-        self._cur_skill_step = self._cur_skill_step.to(device)
 
     def _internal_act(
         self,
@@ -218,25 +324,6 @@ class NnSkillPolicy(Policy):
         full_action[:, self._ac_start : self._ac_start + self._ac_len] = action
         return full_action, rnn_hidden_states
 
-    def act(
-        self,
-        observations,
-        rnn_hidden_states,
-        prev_actions,
-        masks,
-        cur_batch_idx,
-        deterministic=False,
-    ):
-        self._cur_skill_step[cur_batch_idx] += 1
-        return self._internal_act(
-            observations,
-            rnn_hidden_states,
-            prev_actions,
-            masks,
-            cur_batch_idx,
-            deterministic,
-        )
-
     @classmethod
     def from_config(cls, config, observation_space, action_space, batch_size):
         # Load the wrap policy from file
@@ -263,7 +350,7 @@ class NnSkillPolicy(Policy):
             space = filtered_obs_space.spaces[k]
             # There is always a 3D position
             filtered_obs_space.spaces[k] = truncate_obs_space(space, 3)
-        logger.info(
+        baselines_logger.debug(
             f"Skill {config.skill_name}: Loaded observation space {filtered_obs_space}",
         )
 
@@ -273,13 +360,27 @@ class NnSkillPolicy(Policy):
                 for k in policy_cfg.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
             }
         )
-        logger.info(
+
+        if "ARM_ACTION" in filtered_action_space.spaces and (
+            policy_cfg.TASK_CONFIG.TASK.ACTIONS.ARM_ACTION.GRIP_CONTROLLER
+            is None
+        ):
+            filtered_action_space["ARM_ACTION"] = spaces.Dict(
+                {
+                    k: v
+                    for k, v in filtered_action_space["ARM_ACTION"].items()
+                    if k != "grip_action"
+                }
+            )
+
+        baselines_logger.debug(
             f"Loaded action space {filtered_action_space} for skill {config.skill_name}",
         )
 
         actor_critic = policy.from_config(
             policy_cfg, filtered_obs_space, filtered_action_space
         )
+
         try:
             actor_critic.load_state_dict(
                 {  # type: ignore
@@ -290,7 +391,7 @@ class NnSkillPolicy(Policy):
 
         except Exception as e:
             raise ValueError(
-                f"Could not load checkpoint for skill {config.skill_name}"
+                f"Could not load checkpoint for skill {config.skill_name} from {config.LOAD_CKPT_FILE}"
             ) from e
 
         return cls(
@@ -301,6 +402,43 @@ class NnSkillPolicy(Policy):
             filtered_action_space,
             batch_size,
         )
+
+
+class WaitSkillPolicy(SkillPolicy):
+    def __init__(
+        self,
+        config,
+        action_space: spaces.Space,
+        batch_size,
+    ):
+        super().__init__(config, action_space, batch_size, True)
+        self._wait_time = -1
+
+    def _parse_skill_arg(self, skill_arg: str) -> Any:
+        self._wait_time = int(skill_arg[0])
+        self._internal_log(f"Requested wait time {self._wait_time}")
+
+    def _is_skill_done(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+    ) -> torch.Tensor:
+        assert self._wait_time > 0
+        return (self._cur_skill_step >= self._wait_time).float()
+
+    def _internal_act(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+        cur_batch_idx,
+        deterministic=False,
+    ):
+        action = torch.zeros(prev_actions.shape, device=prev_actions.device)
+        return action, rnn_hidden_states
 
 
 class PickSkillPolicy(NnSkillPolicy):
@@ -353,6 +491,63 @@ class PickSkillPolicy(NnSkillPolicy):
         return action, hxs
 
 
+class ArtObjSkillPolicy(NnSkillPolicy):
+    def on_enter(
+        self,
+        skill_arg: List[str],
+        batch_idx: int,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        super().on_enter(
+            skill_arg, batch_idx, observations, rnn_hidden_states, prev_actions
+        )
+        self._did_leave_start_zone = torch.zeros(
+            self._batch_size, device=prev_actions.device
+        )
+        self._episode_start_resting_pos = observations[
+            RelativeRestingPositionSensor.cls_uuid
+        ]
+
+    def _is_skill_done(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+    ) -> torch.Tensor:
+
+        cur_resting_pos = observations[RelativeRestingPositionSensor.cls_uuid]
+
+        did_leave_start_zone = (
+            torch.norm(
+                cur_resting_pos - self._episode_start_resting_pos, dim=-1
+            )
+            > self._config.START_ZONE_RADIUS
+        )
+        self._did_leave_start_zone = torch.logical_or(
+            self._did_leave_start_zone, did_leave_start_zone
+        )
+
+        cur_resting_dist = torch.norm(
+            observations[RelativeRestingPositionSensor.cls_uuid], dim=-1
+        )
+        is_within_thresh = cur_resting_dist < self._config.AT_RESTING_THRESHOLD
+
+        is_not_holding = 1 - observations[IsHoldingSensor.cls_uuid].view(-1)
+
+        return (
+            is_not_holding
+            * is_within_thresh.float()
+            * self._did_leave_start_zone.float()
+        )
+
+    def _parse_skill_arg(self, skill_arg):
+        self._internal_log(f"Parsing skill argument {skill_arg}")
+        return int(skill_arg[-1].split("|")[1])
+
+
 class PlaceSkillPolicy(PickSkillPolicy):
     @dataclass(frozen=True)
     class PlaceSkillArgs:
@@ -399,6 +594,25 @@ class PlaceSkillPolicy(PickSkillPolicy):
 
 
 class NavSkillPolicy(NnSkillPolicy):
+    def __init__(
+        self,
+        wrap_policy,
+        config,
+        action_space: spaces.Space,
+        filtered_obs_space: spaces.Space,
+        filtered_action_space: spaces.Space,
+        batch_size,
+    ):
+        super().__init__(
+            wrap_policy,
+            config,
+            action_space,
+            filtered_obs_space,
+            filtered_action_space,
+            batch_size,
+            should_keep_hold_state=True,
+        )
+
     def _is_skill_done(
         self,
         observations,
@@ -406,14 +620,19 @@ class NavSkillPolicy(NnSkillPolicy):
         prev_actions,
         masks,
     ) -> torch.Tensor:
-        if self._config.ORACLE_STOP:
-            dist_to_nav_goal = observations[DistToNavGoalSensor.cls_uuid]
-            rot_to_nav_goal = observations[NavRotToGoalSensor.cls_uuid]
-            should_stop = (
-                dist_to_nav_goal < self._config.ORACLE_STOP_DIST
-            ) * (rot_to_nav_goal < self._config.ORACLE_STOP_ANGLE_DIST)
-            return should_stop.float()
-        return torch.zeros(masks.shape[0]).to(masks.device)
+        filtered_prev_actions = prev_actions[
+            :, self._ac_start : self._ac_start + self._ac_len
+        ]
+
+        lin_vel, ang_vel = (
+            filtered_prev_actions[:, 0],
+            filtered_prev_actions[:, 1],
+        )
+        should_stop = (
+            torch.abs(lin_vel) < self._config.LIN_SPEED_STOP
+            and torch.abs(ang_vel) < self._config.ANG_SPEED_STOP
+        )
+        return should_stop.float()
 
     def _parse_skill_arg(self, skill_arg):
         return int(skill_arg[-1].split("|")[1])
@@ -461,6 +680,9 @@ class OracleNavPolicy(NnSkillPolicy):
         rnn_hidden_states,
         prev_actions,
     ):
+        ret = super().on_enter(
+            skill_arg, batch_idx, observations, rnn_hidden_states, prev_actions
+        )
         self._is_at_targ[batch_idx] = 0.0
         self._nav_targs[batch_idx] = observations[NavGoalSensor.cls_uuid][
             batch_idx
@@ -468,16 +690,14 @@ class OracleNavPolicy(NnSkillPolicy):
         self._internal_log(
             f"Got nav target {self._nav_targs} on enter", observations
         )
-        return super().on_enter(
-            skill_arg, batch_idx, observations, rnn_hidden_states, prev_actions
-        )
+        return ret
 
     @classmethod
     def from_config(cls, config, observation_space, action_space, batch_size):
         filtered_action_space = ActionSpace(
             {config.NAV_ACTION_NAME: action_space[config.NAV_ACTION_NAME]}
         )
-        logger.info(
+        baselines_logger.debug(
             f"Loaded action space {filtered_action_space} for skill {config.skill_name}"
         )
         return cls(
@@ -536,6 +756,8 @@ class OracleNavPolicy(NnSkillPolicy):
             batch_obj_targ_pos = observations[AbsTargetStartSensor.cls_uuid]
 
         full_action = torch.zeros(prev_actions.shape, device=masks.device)
+        full_action = self._keep_holding_state(full_action, observations)
+
         for i, (
             nav_targ,
             localization,

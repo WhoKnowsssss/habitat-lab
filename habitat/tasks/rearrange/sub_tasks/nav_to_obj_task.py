@@ -14,20 +14,20 @@ import numpy as np
 
 from habitat.core.dataset import Episode
 from habitat.core.registry import registry
-from habitat.tasks.rearrange.multi_task.dynamic_task_utils import (
-    load_task_object,
-)
 from habitat.tasks.rearrange.multi_task.pddl_domain import PddlDomain
 from habitat.tasks.rearrange.multi_task.rearrange_pddl import (
-    Action,
+    PddlAction,
     RearrangeObjectTypes,
     search_for_id,
+)
+from habitat.tasks.rearrange.multi_task.task_creator_utils import (
+    create_task_object,
 )
 from habitat.tasks.rearrange.rearrange_task import ADD_CACHE_KEY, RearrangeTask
 from habitat.tasks.rearrange.utils import (
     CacheHelper,
-    logger,
     rearrange_collision,
+    rearrange_logger,
 )
 
 DYN_NAV_TASK_NAME = "RearrangeNavToObjTask-v0"
@@ -101,10 +101,13 @@ class DynNavRLEnv(RearrangeTask):
 
     def _get_allowed_tasks(
         self, filter_actions: Optional[List[str]] = None
-    ) -> Dict[str, List[Action]]:
+    ) -> Dict[str, List[PddlAction]]:
+        """
+        :returns: Mapping the action name to the grounded instances of the action that are possible in the current state.
+        """
         cur_preds = self.domain.get_true_predicates()
         # Get all actions which can be actively applied.
-        logger.info(f"Current true predicates {cur_preds}")
+        rearrange_logger.debug(f"Current true predicates {cur_preds}")
 
         allowed_actions = defaultdict(list)
         for action in self.domain.actions.values():
@@ -119,12 +122,14 @@ class DynNavRLEnv(RearrangeTask):
             ):
                 continue
 
-            consistent_actions = action.get_consistent_action_copies(
+            consistent_actions = action.get_possible_actions(
                 cur_preds, self.domain.get_name_to_id_mapping()
             )
-            logger.info(f"For {action.name} got consistent actions:")
+            rearrange_logger.debug(
+                f"For {action.name} got consistent actions:"
+            )
             for action in consistent_actions:
-                logger.info(f"- {action}")
+                rearrange_logger.debug(f"- {action}")
                 allowed_actions[action.name].append(action)
 
         return allowed_actions
@@ -151,17 +156,17 @@ class DynNavRLEnv(RearrangeTask):
     def _get_nav_targ(
         self, task_name: str, task_args: Dict[str, Any], episode: Episode
     ) -> Tuple[mn.Vector3, float, RearrangeObjectTypes]:
-        logger.info(
+        rearrange_logger.debug(
             f"Getting nav target for {task_name} with arguments {task_args}"
         )
         # Get the config for this task
         action = self.domain.get_task_match_for_name(task_name)
-        logger.info(
+        rearrange_logger.debug(
             f"Corresponding action with task={action.task}, task_def={action.task_def}, config_task_args={action.config_task_args}"
         )
 
         orig_state = self._sim.capture_state(with_robot_js=True)
-        load_task_object(
+        create_task_object(
             action.task,
             action.task_def,
             self._config.clone(),
@@ -211,21 +216,25 @@ class DynNavRLEnv(RearrangeTask):
         """
         :returns: The target position and the target angle.
         """
-        logger.info(
+        rearrange_logger.debug(
             f"Navigation getting target for {self.force_obj_to_idx} with task arguments {self.force_kwargs}"
         )
         name_to_id = self.domain.get_name_to_id_mapping()
 
         if self.force_recep_to_name is not None:
-            logger.info(f"Forcing receptacle {self.force_recep_to_name}")
+            rearrange_logger.debug(
+                f"Forcing receptacle {self.force_recep_to_name}"
+            )
             _, entity_type = search_for_id(
                 self.force_recep_to_name, name_to_id
             )
             use_name = self.force_recep_to_name
         else:
-            logger.info(f"Search object name {self.force_obj_to_name}")
             _, entity_type = search_for_id(self.force_obj_to_name, name_to_id)
             use_name = self.force_obj_to_name
+            rearrange_logger.debug(
+                f"Search object name {use_name} with type {entity_type}"
+            )
 
         matching_skills = self.domain.get_matching_skills(
             entity_type, use_name
@@ -237,11 +246,9 @@ class DynNavRLEnv(RearrangeTask):
                 f"Got no allowed tasks {allowed_tasks} from {matching_skills}, {entity_type}, {use_name}"
             )
 
-        task_name = random.choice(list(allowed_tasks.keys()))
         filtered_allowed_tasks = []
         orig_args = self.force_kwargs["orig_applied_args"]
-        for task_name in allowed_tasks:
-            sub_allowed_tasks = allowed_tasks[task_name]
+        for sub_allowed_tasks in allowed_tasks.values():
             for task in sub_allowed_tasks:
                 assigned_args = {
                     k: v
@@ -249,21 +256,25 @@ class DynNavRLEnv(RearrangeTask):
                         task.parameters, task.orig_applied_func_args
                     )
                 }
-                # Check that `orig_args` is a SUBSET of `assigned_args`
+                # Check that `orig_args` is a SUBSET of `assigned_args` meaning
+                # the keys and values match something in assigned args.
                 is_orig_args_subset = all(
-                    [k in assigned_args for k in orig_args]
+                    [
+                        (k in assigned_args) and (assigned_args[k] == v)
+                        for k, v in orig_args.items()
+                    ]
                 )
                 if is_orig_args_subset:
                     filtered_allowed_tasks.append(task)
-        logger.info(f"Got allowed tasks {filtered_allowed_tasks}")
+        rearrange_logger.debug(f"Got allowed tasks {filtered_allowed_tasks}")
 
         if len(filtered_allowed_tasks) == 0:
             raise ValueError(
-                f"Got no tasks out of {[x.name for x in allowed_tasks]} with entity_type={entity_type}, use_name={use_name}"
+                f"Got no tasks out of {allowed_tasks} with entity_type={entity_type}, use_name={use_name}"
             )
         nav_to_task = filtered_allowed_tasks[0]
 
-        logger.info(
+        rearrange_logger.debug(
             f"Navigating to {nav_to_task.name} with arguments {nav_to_task.task_args}"
         )
 
@@ -280,7 +291,7 @@ class DynNavRLEnv(RearrangeTask):
     def reset(self, episode: Episode):
         sim = self._sim
         super().reset(episode)
-        logger.info("Resetting navigation task")
+        rearrange_logger.debug("Resetting navigation task")
 
         if self.domain is None:
             self.domain = PddlDomain(
@@ -308,7 +319,7 @@ class DynNavRLEnv(RearrangeTask):
                     self._nav_to_task_name,
                     self._nav_to_obj_type,
                 ) = self.start_states[full_key]
-                logger.info(
+                rearrange_logger.debug(
                     f"Forcing episode, loaded `{full_key}` from cache {self.cache.cache_id}."
                 )
             else:
@@ -327,7 +338,7 @@ class DynNavRLEnv(RearrangeTask):
                 )
                 if self._config.SHOULD_SAVE_TO_CACHE:
                     self.cache.save(self.start_states)
-                    logger.info(
+                    rearrange_logger.debug(
                         f"Forcing episode, saved key `{full_key}` to cache {self.cache.cache_id}."
                     )
             start_pos, start_rot = get_robo_start_pos(
@@ -346,7 +357,7 @@ class DynNavRLEnv(RearrangeTask):
                     self._nav_to_task_name,
                     self._nav_to_obj_type,
                 ) = self.start_states[episode_id]
-                logger.info(
+                rearrange_logger.debug(
                     f"Loaded episode from cache {self.cache.cache_id}."
                 )
 
@@ -375,13 +386,15 @@ class DynNavRLEnv(RearrangeTask):
                 )
                 if self._config.SHOULD_SAVE_TO_CACHE:
                     self.cache.save(self.start_states)
-                    logger.info(
+                    rearrange_logger.debug(
                         f"Saved episode to cache {self.cache.cache_id}."
                     )
 
             targ_idxs, goal_pos = sim.get_targets()
 
-        logger.info(f"Got nav target position {self._nav_target_pos}")
+        rearrange_logger.debug(
+            f"Got nav target position {self._nav_target_pos}"
+        )
 
         if not sim.pathfinder.is_navigable(self._nav_target_pos):
             print("Goal is not navigable")

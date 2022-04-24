@@ -12,7 +12,6 @@ import time
 from typing import List, Optional, Tuple
 
 import attr
-import gym
 import magnum as mn
 import numpy as np
 import quaternion
@@ -21,11 +20,9 @@ import habitat_sim
 from habitat.core.logging import HabitatLogger
 from habitat_sim.physics import MotionType
 
-logger = HabitatLogger(
+rearrange_logger = HabitatLogger(
     name="rearrange_task",
-    level=logging.INFO
-    if os.environ.get("HABITAT_REARRANGE_LOG", 0)
-    else logging.ERROR,
+    level=int(os.environ.get("HABITAT_REARRANGE_LOG", logging.ERROR)),
     format_str="[%(levelname)s,%(name)s] %(asctime)-15s %(filename)s:%(lineno)d %(message)s",
 )
 
@@ -241,13 +238,13 @@ class CacheHelper:
         try:
             with open(self.cache_id, "rb") as f:
                 if self.verbose:
-                    logger.info(f"Loading cache @{self.cache_id}")
+                    rearrange_logger.info(f"Loading cache @{self.cache_id}")
                 return pickle.load(f)
         except EOFError as e:
             if load_depth == 32:
                 raise e
             # try again soon
-            logger.warning(
+            rearrange_logger.warning(
                 f"Cache size is {osp.getsize(self.cache_id)} for {self.cache_id}"
             )
             time.sleep(1.0 + np.random.uniform(0.0, 1.0))
@@ -256,18 +253,17 @@ class CacheHelper:
     def save(self, val):
         with open(self.cache_id, "wb") as f:
             if self.verbose:
-                logger.info(f"Saving cache @ {self.cache_id}")
+                rearrange_logger.info(f"Saving cache @ {self.cache_id}")
             pickle.dump(val, f)
 
 
-def reshape_obs_space(obs_space, new_shape):
-    assert isinstance(obs_space, gym.spaces.Box)
-    return gym.spaces.Box(
-        shape=new_shape,
-        high=obs_space.low.reshape(-1)[0],
-        low=obs_space.high.reshape(-1)[0],
-        dtype=obs_space.dtype,
-    )
+def batch_transform_point(
+    points: np.ndarray, transform_matrix: mn.Matrix4, dtype
+) -> np.ndarray:
+    transformed_points = []
+    for point in points:
+        transformed_points.append(transform_matrix.transform_point(point))
+    return np.array(transformed_points, dtype=dtype)
 
 
 try:

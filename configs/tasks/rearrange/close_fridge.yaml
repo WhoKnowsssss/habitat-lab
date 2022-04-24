@@ -16,7 +16,7 @@ TASK:
     BASE_ANGLE_NOISE: 0.15
     SPAWN_REGION_SCALE: 0.2
     JOINT_MAX_IMPULSE: -1.0
-    CONSTRAINT_VIOLATION_ENDS_EPISODE: False
+    CONSTRAINT_VIOLATION_ENDS_EPISODE: True
     DESIRED_RESTING_POSITION: [0.5, 0.0, 1.0]
 
     USE_MARKER_T: False
@@ -56,7 +56,7 @@ TASK:
         MIN_FORCE: 20.0
     FORCE_TERMINATE:
         TYPE: "ForceTerminate"
-        MAX_ACCUM_FORCE: 5000.0
+        MAX_ACCUM_FORCE: -1.0
 
     ROBOT_COLLS:
         TYPE: "RobotCollisions"
@@ -99,6 +99,8 @@ TASK:
         FORCE_END_PEN: 10.0
     NUM_STEPS:
         TYPE: "NumStepsMeasure"
+    DID_VIOLATE_HOLD_CONSTRAINT:
+        TYPE: "DidViolateHoldConstraintMeasure"
 
     MEASUREMENTS:
         - "ROBOT_FORCE"
@@ -111,6 +113,7 @@ TASK:
         - "ART_OBJ_SUCCESS"
         - "ART_OBJ_REWARD"
         - "NUM_STEPS"
+        - "DID_VIOLATE_HOLD_CONSTRAINT"
 
     ACTIONS:
         ARM_ACTION:

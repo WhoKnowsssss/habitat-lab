@@ -1,19 +1,23 @@
 import os.path as osp
+from typing import Dict
 
+import gym.spaces as spaces
 import torch
 
 from habitat_baselines.common.baseline_registry import baseline_registry
-from habitat_baselines.common.logging import logger
+from habitat_baselines.common.logging import baselines_logger
 from habitat_baselines.rl.hrl.high_level_policy import (  # noqa: F401.
     GtHighLevelPolicy,
     HighLevelPolicy,
 )
 from habitat_baselines.rl.hrl.skills import (  # noqa: F401.
+    ArtObjSkillPolicy,
     NavSkillPolicy,
-    NnSkillPolicy,
     OracleNavPolicy,
     PickSkillPolicy,
     PlaceSkillPolicy,
+    SkillPolicy,
+    WaitSkillPolicy,
 )
 from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.utils.common import get_num_actions
@@ -22,16 +26,21 @@ from habitat_baselines.utils.common import get_num_actions
 @baseline_registry.register_policy
 class HierarchicalPolicy(Policy):
     def __init__(
-        self, config, full_config, observation_space, action_space, num_envs
+        self,
+        config,
+        full_config,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        num_envs: int,
     ):
         super().__init__()
 
         self._action_space = action_space
-        self._num_envs = num_envs
+        self._num_envs: int = num_envs
 
         # Maps (skill idx -> skill)
-        self._skills = {}
-        self._name_to_idx = {}
+        self._skills: Dict[int, SkillPolicy] = {}
+        self._name_to_idx: Dict[str, int] = {}
 
         for i, (skill_id, use_skill_name) in enumerate(
             config.USE_SKILLS.items()
@@ -48,7 +57,7 @@ class HierarchicalPolicy(Policy):
             self._skills[i] = skill_policy
             self._name_to_idx[skill_id] = i
 
-        self._call_high_level = torch.ones(self._num_envs)
+        self._call_high_level: torch.Tensor = torch.ones(self._num_envs)
         self._cur_skills: torch.Tensor = torch.zeros(self._num_envs)
 
         high_level_cls = eval(config.high_level_policy.name)
@@ -101,6 +110,7 @@ class HierarchicalPolicy(Policy):
     ):
 
         self._high_level_policy.apply_mask(masks)
+        use_device = prev_actions.device
 
         batched_observations = [
             {k: v[batch_idx].unsqueeze(0) for k, v in observations.items()}
@@ -110,10 +120,15 @@ class HierarchicalPolicy(Policy):
         batched_prev_actions = prev_actions.unsqueeze(1)
         batched_masks = masks.unsqueeze(1)
 
-        batched_bad_should_terminate = torch.zeros(self._num_envs)
+        batched_bad_should_terminate = torch.zeros(
+            self._num_envs, device=use_device
+        )
 
         # Check if skills should terminate.
         for batch_idx, skill_idx in enumerate(self._cur_skills):
+            if masks[batch_idx] == 0.0:
+                # Don't check if the skill is done if the episode ended.
+                continue
             should_terminate, bad_should_terminate = self._skills[
                 skill_idx.item()
             ].should_terminate(
@@ -132,7 +147,7 @@ class HierarchicalPolicy(Policy):
 
         # If any skills want to terminate invoke the high-level policy to get
         # the next skill.
-        hl_terminate = torch.zeros(self._num_envs, device=prev_actions.device)
+        hl_terminate = torch.zeros(self._num_envs, device=use_device)
         if self._call_high_level.sum() > 0:
             (
                 new_skills,
@@ -181,11 +196,11 @@ class HierarchicalPolicy(Policy):
             )
             actions[batch_idx] = action
 
-        should_terminate = bad_should_terminate + hl_terminate
+        should_terminate = batched_bad_should_terminate + hl_terminate
         if should_terminate.sum() > 0:
             # End the episode where requested.
             for batch_idx in torch.nonzero(should_terminate):
-                logger.info(
+                baselines_logger.info(
                     f"Calling stop action for batch {batch_idx}, {bad_should_terminate}, {hl_terminate}"
                 )
                 actions[batch_idx, self._stop_action_idx] = 1.0
