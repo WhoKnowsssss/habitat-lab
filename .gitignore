@@ -78,6 +78,10 @@ target/
 
 # exclude data from source control by default
 data
+wandb
+video_dir
+video_dir_2
+tb
 
 # Mac OS-specific storage files
 .DS_Store
