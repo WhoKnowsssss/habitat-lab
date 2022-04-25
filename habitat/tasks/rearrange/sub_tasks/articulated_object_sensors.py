@@ -15,6 +15,7 @@ from habitat.tasks.rearrange.rearrange_sensors import (
     EndEffectorToRestDistance,
     RearrangeReward,
 )
+from habitat.tasks.rearrange.utils import rearrange_logger
 
 
 @registry.register_sensor
@@ -48,7 +49,7 @@ class MarkerRelPosSensor(Sensor):
         )
 
     def get_observation(self, observations, episode, *args, **kwargs):
-        marker = self._sim.get_marker(self._task.use_marker_name)
+        marker = self._task.get_use_marker()
         ee_trans = self._sim.robot.ee_transform
         rel_marker_pos = ee_trans.inverted().transform_point(
             marker.get_current_position()
@@ -336,6 +337,9 @@ class ArtObjReward(RearrangeReward):
                 # Grasped wrong marker
                 reward -= self._config.WRONG_GRASP_PEN
                 if self._config.WRONG_GRASP_END:
+                    rearrange_logger.debug(
+                        "Grasped wrong marker, ending episode."
+                    )
                     task.should_end = True
             else:
                 # Grasped right marker

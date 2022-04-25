@@ -32,12 +32,12 @@ from habitat_baselines.rl.ddppo.policy.running_mean_and_var import (
 from habitat_baselines.rl.models.rnn_state_encoder import (
     build_rnn_state_encoder,
 )
-from habitat_baselines.rl.ppo import Net, Policy
+from habitat_baselines.rl.ppo import Net, NetPolicy
 from habitat_baselines.utils.common import get_num_actions
 
 
 @baseline_registry.register_policy
-class PointNavResNetPolicy(Policy):
+class PointNavResNetPolicy(NetPolicy):
     def __init__(
         self,
         observation_space: spaces.Dict,
@@ -66,6 +66,9 @@ class PointNavResNetPolicy(Policy):
             self.action_distribution_type = "categorical"
             include_visual_keys = None
 
+        if fuse_keys is None:
+            fuse_keys = []
+
         super().__init__(
             PointNavResNetNet(
                 observation_space=observation_space,
@@ -76,9 +79,9 @@ class PointNavResNetPolicy(Policy):
                 backbone=backbone,
                 resnet_baseplanes=resnet_baseplanes,
                 normalize_visual_inputs=normalize_visual_inputs,
+                fuse_keys=fuse_keys,
                 force_blind_policy=force_blind_policy,
                 discrete_actions=discrete_actions,
-                fuse_keys=fuse_keys,
                 include_visual_keys=include_visual_keys,
             ),
             dim_actions=get_num_actions(action_space),
@@ -102,7 +105,7 @@ class PointNavResNetPolicy(Policy):
             normalize_visual_inputs="rgb" in observation_space.spaces,
             force_blind_policy=config.FORCE_BLIND_POLICY,
             policy_config=config.RL.POLICY,
-            fuse_keys=config.RL.get("GYM_OBS_KEYS", None),
+            fuse_keys=config.RL.GYM_OBS_KEYS,
         )
 
 
@@ -237,9 +240,9 @@ class PointNavResNetNet(Net):
         backbone,
         resnet_baseplanes,
         normalize_visual_inputs: bool,
+        fuse_keys: List[str],
         force_blind_policy: bool = False,
         discrete_actions: bool = True,
-        fuse_keys: Optional[List[str]] = None,
         include_visual_keys: Optional[List[str]] = None,
     ):
         super().__init__()
@@ -256,8 +259,6 @@ class PointNavResNetNet(Net):
 
         # Only fuse the 1D state inputs. Other inputs are processed by the
         # visual encoder
-        if fuse_keys is None:
-            fuse_keys = []
         self._fuse_keys: List[str] = [
             k for k in fuse_keys if len(observation_space.spaces[k].shape) == 1
         ]

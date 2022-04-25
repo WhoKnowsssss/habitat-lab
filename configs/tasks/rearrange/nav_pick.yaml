@@ -14,7 +14,7 @@ TASK:
     - 0.5
     - 0.0
     - 1.0
-    CONSTRAINT_VIOLATION_ENDS_EPISODE: false
+    CONSTRAINT_VIOLATION_ENDS_EPISODE: False
     BASE_ANGLE_NOISE: 0.15
     BASE_NOISE: 0.05
     EASY_INIT: false
@@ -24,11 +24,11 @@ TASK:
     OBJ_SUCC_THRESH: 0.3
     ART_SUCC_THRESH: 0.15
     SINGLE_EVAL_NODE: -1
-    LIMIT_TASK_NODE: -1
-    LIMIT_TASK_LEN_SCALING: 0.0
     DEBUG_SKIP_TO_NODE: -1
     SKIP_NODES:
     - move_obj
+    TARGET_START_POINT_GOAL_SENSOR:
+        TYPE: "TargetOrGoalStartPointGoalSensor"
     TARGET_START_SENSOR:
         TYPE: TargetStartSensor
         GOAL_FORMAT: CARTESIAN
@@ -37,20 +37,6 @@ TASK:
         TYPE: GoalSensor
         GOAL_FORMAT: CARTESIAN
         DIMENSIONALITY: 3
-    ABS_TARGET_START_SENSOR:
-        TYPE: AbsTargetStartSensor
-        GOAL_FORMAT: CARTESIAN
-        DIMENSIONALITY: 3
-    ABS_GOAL_SENSOR:
-        TYPE: AbsGoalSensor
-        GOAL_FORMAT: CARTESIAN
-        DIMENSIONALITY: 3
-    DIST_TO_NAV_GOAL:
-        TYPE: DistToNavGoalSensor
-    ROT_DIST_TO_NAV_GOAL:
-        TYPE: NavRotToGoalSensor
-    LOCALIZATION_SENSOR:
-        TYPE: LocalizationSensor
     JOINT_SENSOR:
         TYPE: JointSensor
         DIMENSIONALITY: 7
@@ -60,28 +46,18 @@ TASK:
         TYPE: IsHoldingSensor
     RELATIVE_RESTING_POS_SENSOR:
         TYPE: RelativeRestingPositionSensor
-    ORACLE_NAV_ACTION_SENSOR:
-        TYPE: OracleNavigationActionSensor
-    NAV_GOAL_SENSOR:
-        TYPE: NavGoalSensor
-    TARGET_START_POINT_GOAL_SENSOR:
-        TYPE: "TargetOrGoalStartPointGoalSensor"
+    MARKER_REL_POS_SENSOR:
+        TYPE: "MarkerRelPosSensor"
     SENSORS:
     - TARGET_START_SENSOR
     - GOAL_SENSOR
-    - ABS_GOAL_SENSOR
     - JOINT_SENSOR
     - IS_HOLDING_SENSOR
     - END_EFFECTOR_SENSOR
     - RELATIVE_RESTING_POS_SENSOR
-    - DIST_TO_NAV_GOAL
-    - ROT_DIST_TO_NAV_GOAL
-    - ORACLE_NAV_ACTION_SENSOR
-    - ABS_TARGET_START_SENSOR
-    - LOCALIZATION_SENSOR
-    - NAV_GOAL_SENSOR
     - TARGET_START_POINT_GOAL_SENSOR
-    EXCESSIVE_FORCE_SHOULD_END:
+    - MARKER_REL_POS_SENSOR
+    FORCE_TERMINATE:
         TYPE: ForceTerminate
         MAX_ACCUM_FORCE: -1.0
     ROBOT_FORCE:
@@ -127,7 +103,7 @@ TASK:
     REARRANGE_NAV_TO_OBJ_SUCCESS:
         TYPE: NavToObjSuccess
         MUST_LOOK_AT_TARG: true
-        SUCCESS_ANGLE_DIST: 0.3
+        SUCCESS_ANGLE_DIST: 0.7
         HEURISTIC_STOP: false
     PICK_REWARD:
         TYPE: RearrangePickReward
@@ -148,7 +124,7 @@ TASK:
         WRONG_PICK_SHOULD_END: false
     PICK_SUCCESS:
         TYPE: RearrangePickSuccess
-        SUCC_THRESH: 0.15
+        EE_RESTING_SUCCESS_THRESHOLD: 0.2
     COMPOSITE_NODE_IDX:
         TYPE: CompositeNodeIdx
     COMPOSITE_SUCCESS:
@@ -159,10 +135,47 @@ TASK:
         SUCCESS_REWARD: 10.0
     NUM_STEPS:
         TYPE: NumStepsMeasure
+    DID_VIOLATE_HOLD_CONSTRAINT:
+        TYPE: "DidViolateHoldConstraintMeasure"
+
+    #####################
+    # Articulated object measures
+    ART_OBJ_STATE:
+        TYPE: "ArtObjState"
+    EE_DIST_TO_MARKER:
+        TYPE: "EndEffectorDistToMarker"
+
+    ART_OBJ_AT_DESIRED_STATE:
+        TYPE: "ArtObjAtDesiredState"
+        USE_ABSOLUTE_DISTANCE: False
+        SUCCESS_DIST_THRESHOLD: 0.05
+
+    ART_OBJ_SUCCESS:
+        TYPE: "ArtObjSuccess"
+        REST_DIST_THRESHOLD: 0.2
+
+    ART_OBJ_REWARD:
+        TYPE: "ArtObjReward"
+        WRONG_GRASP_END: False
+        WRONG_GRASP_PEN: 5.0
+        GRASP_REWARD: 5.0
+        ART_AT_DESIRED_STATE_REWARD: 5.0
+
+        MARKER_DIST_REWARD: 1.0
+        EE_DIST_REWARD: 10.0
+        ART_DIST_REWARD: 10.0
+
+        # General Rearrange Reward config
+        CONSTRAINT_VIOLATE_PEN: 1.0
+        FORCE_PEN: 0.0
+        MAX_FORCE_PEN: 1.0
+        FORCE_END_PEN: 10.0
+    #####################
+
     MEASUREMENTS:
     - OBJECT_TO_GOAL_DISTANCE
     - ROBOT_FORCE
-    - EXCESSIVE_FORCE_SHOULD_END
+    - FORCE_TERMINATE
     - ROBOT_COLLS
     - END_EFFECTOR_TO_REST_DISTANCE
     - END_EFFECTOR_TO_OBJECT_DISTANCE
@@ -181,6 +194,13 @@ TASK:
     - COMPOSITE_SUCCESS
     - COMPOSITE_REWARD
     - NUM_STEPS
+    - DID_VIOLATE_HOLD_CONSTRAINT
+    # Articulated task measures
+    - EE_DIST_TO_MARKER
+    - ART_OBJ_AT_DESIRED_STATE
+    - ART_OBJ_STATE
+    - ART_OBJ_SUCCESS
+    - ART_OBJ_REWARD
     ACTIONS:
         ARM_ACTION:
             TYPE: ArmAction
@@ -200,8 +220,6 @@ TASK:
             ALLOW_BACK: true
             MIN_ABS_LIN_SPEED: 1.0
             MIN_ABS_ANG_SPEED: 1.0
-        EMPTY:
-            TYPE: EmptyAction
         REARRANGE_STOP:
             TYPE: RearrangeStopAction
     POSSIBLE_ACTIONS:

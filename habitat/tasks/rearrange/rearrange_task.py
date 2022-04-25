@@ -15,8 +15,8 @@ from habitat.tasks.nav.nav import NavigationTask
 from habitat.tasks.rearrange.rearrange_sim import RearrangeSim
 from habitat.tasks.rearrange.utils import (
     CollisionDetails,
-    logger,
     rearrange_collision,
+    rearrange_logger,
 )
 
 
@@ -37,6 +37,8 @@ class RearrangeTask(NavigationTask):
     all rearrangement tasks.
     """
 
+    _cur_episode_step: int
+
     def overwrite_sim_config(self, sim_config, episode):
         return merge_sim_episode_with_object_config(sim_config, episode)
 
@@ -51,6 +53,7 @@ class RearrangeTask(NavigationTask):
         self._sim_reset = True
         self._targ_idx: int = 0
         self._episode_id: str = ""
+        self._cur_episode_step = 0
 
     @property
     def targ_idx(self):
@@ -84,6 +87,7 @@ class RearrangeTask(NavigationTask):
         self.prev_coll_accum = CollisionDetails()
         self.should_end = False
         self._done = False
+        self._cur_episode_step = 0
 
         self._sim.set_robot_base_to_random_point()
 
@@ -104,6 +108,7 @@ class RearrangeTask(NavigationTask):
         obs = super().step(action=action, episode=episode)
 
         self.prev_coll_accum = copy.copy(self.coll_accum)
+        self._cur_episode_step += 1
 
         return obs
 
@@ -125,9 +130,9 @@ class RearrangeTask(NavigationTask):
             done = True
 
         if done:
-            logger.info("-" * 10)
-            logger.info("------ Episode Over --------")
-            logger.info("-" * 10)
+            rearrange_logger.debug("-" * 10)
+            rearrange_logger.debug("------ Episode Over --------")
+            rearrange_logger.debug("-" * 10)
 
         return not done
 
@@ -193,8 +198,8 @@ class RearrangeTask(NavigationTask):
             not self._should_end
         ) and self._is_episode_active
         if new_val:
-            logger.info("-" * 40)
-            logger.info(
-                f"-----Episode {self._episode_id} requested to end.-----"
+            rearrange_logger.debug("-" * 40)
+            rearrange_logger.debug(
+                f"-----Episode {self._episode_id} requested to end after {self._cur_episode_step} steps.-----"
             )
-            logger.info("-" * 40)
+            rearrange_logger.debug("-" * 40)

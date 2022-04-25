@@ -25,9 +25,9 @@ from habitat.tasks.rearrange.utils import (
     IkHelper,
     get_aabb,
     is_pb_installed,
-    logger,
     make_render_only,
     rearrange_collision,
+    rearrange_logger,
 )
 from habitat_sim.nav import NavMeshSettings
 from habitat_sim.physics import JointMotorSettings, MotionType
@@ -38,6 +38,12 @@ from habitat_sim.robots import FetchRobot, FetchRobotNoWheels
 
 @registry.register_simulator(name="RearrangeSim-v0")
 class RearrangeSim(HabitatSim):
+    """
+    :property ref_handle_to_rigid_obj_id: maps a handle name to the relative position of an object in `self.scene_obj_ids`.
+    """
+
+    ref_handle_to_rigid_obj_id: Optional[Dict[str, int]]
+
     def __init__(self, config: Config):
         super().__init__(config)
 
@@ -66,7 +72,7 @@ class RearrangeSim(HabitatSim):
         # Used to get data from the RL environment class to sensors.
         self._goal_pos = None
         self.viz_ids: Dict[Any, Any] = defaultdict(lambda: None)
-        self.ref_handle_to_rigid_obj_id: Optional[Dict[str, int]] = None
+        self.ref_handle_to_rigid_obj_id = None
         robot_cls = eval(self.habitat_config.ROBOT_TYPE)
         self.robot = robot_cls(self.habitat_config.ROBOT_URDF, self)
         self._orig_robot_js_start = np.array(self.robot.params.arm_init_params)
@@ -294,7 +300,7 @@ class RearrangeSim(HabitatSim):
             if not did_collide:
                 break
         if attempt_i == MAX_ATTEMPTS - 1:
-            logger.warning(
+            rearrange_logger.warning(
                 f"Could not find a collision free start for {self.ep_info['episode_id']}"
             )
 
@@ -570,9 +576,6 @@ class RearrangeSim(HabitatSim):
     def step(self, action: Union[str, int]) -> Observations:
         rom = self.get_rigid_object_manager()
 
-        if self.habitat_config.NEEDS_MARKERS:
-            self._update_markers()
-
         if self.habitat_config.DEBUG_RENDER:
             rom = self.get_rigid_object_manager()
             self._try_acquire_context()
@@ -617,6 +620,9 @@ class RearrangeSim(HabitatSim):
                 self.internal_step(-1, update_robot=False)
             self._prev_sim_obs = self.get_sensor_observations()
             obs = self._sensor_suite.get_observations(self._prev_sim_obs)
+
+        if self.habitat_config.NEEDS_MARKERS:
+            self._update_markers()
 
         # TODO: Make debug cameras more flexible
         if "robot_third_rgb" in obs and self.habitat_config.DEBUG_RENDER:

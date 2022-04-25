@@ -24,7 +24,7 @@ from habitat.tasks.rearrange.grip_actions import (
     SuctionGraspAction,
 )
 from habitat.tasks.rearrange.rearrange_sim import RearrangeSim
-from habitat.tasks.rearrange.utils import rearrange_collision
+from habitat.tasks.rearrange.utils import rearrange_collision, rearrange_logger
 
 
 @registry.register_task_action
@@ -52,12 +52,20 @@ class EmptyAction(SimulatorTaskAction):
 
 @registry.register_task_action
 class RearrangeStopAction(SimulatorTaskAction):
-    name: str = "rearrange_stop"
+    def reset(self, *args, **kwargs):
+        super().reset(*args, **kwargs)
+        self.does_want_terminate = False
 
-    def step(self, task, *args, **kwargs):
-        if kwargs["REARRANGE_STOP"][0] > 0:
-            task.should_end = True
-        return self._sim.step(HabitatSimActions.REARRANGE_STOP)
+    def step(self, task, *args, is_last_action, **kwargs):
+        should_stop = kwargs.get("REARRANGE_STOP", [1.0])
+        if should_stop[0] == 1.0:
+            rearrange_logger.debug("Requesting episode stop.")
+            self.does_want_terminate = True
+
+        if is_last_action:
+            return self._sim.step(HabitatSimActions.REARRANGE_STOP)
+        else:
+            return {}
 
 
 @registry.register_task_action
@@ -98,12 +106,16 @@ class ArmAction(SimulatorTaskAction):
             action_spaces["grip_action"] = self.grip_ctrlr.action_space
         return spaces.Dict(action_spaces)
 
-    def step(self, arm_action, grip_action=None, *args, **kwargs):
-        self.arm_ctrlr.step(arm_action, should_step=False)
+    def step(
+        self, arm_action, is_last_action, grip_action=None, *args, **kwargs
+    ):
+        self.arm_ctrlr.step(arm_action)
         if self.grip_ctrlr is not None and not self.disable_grip:
-            self.grip_ctrlr.step(grip_action, should_step=False)
-
-        return self._sim.step(HabitatSimActions.ARM_ACTION)
+            self.grip_ctrlr.step(grip_action)
+        if is_last_action:
+            return self._sim.step(HabitatSimActions.ARM_ACTION)
+        else:
+            return {}
 
 
 @registry.register_task_action
@@ -132,10 +144,6 @@ class ArmRelPosAction(SimulatorTaskAction):
             delta_pos + self._sim.robot.arm_motor_pos
         )
 
-        if should_step:
-            return self._sim.step(HabitatSimActions.ARM_VEL)
-        return None
-
 
 @registry.register_task_action
 class ArmRelPosKinematicAction(SimulatorTaskAction):
@@ -153,7 +161,7 @@ class ArmRelPosKinematicAction(SimulatorTaskAction):
             dtype=np.float32,
         )
 
-    def step(self, delta_pos, should_step=True, *args, **kwargs):
+    def step(self, delta_pos, *args, **kwargs):
         if self._config.get("SHOULD_CLIP", True):
             # clip from -1 to 1
             delta_pos = np.clip(delta_pos, -1, 1)
@@ -163,9 +171,6 @@ class ArmRelPosKinematicAction(SimulatorTaskAction):
         set_arm_pos = delta_pos + self._sim.robot.arm_joint_pos
         self._sim.robot.arm_joint_pos = set_arm_pos
         self._sim.robot.fix_joint_values = set_arm_pos
-        if should_step:
-            return self._sim.step(HabitatSimActions.ARM_VEL)
-        return None
 
 
 @registry.register_task_action
@@ -184,15 +189,11 @@ class ArmAbsPosAction(SimulatorTaskAction):
             dtype=np.float32,
         )
 
-    def step(self, set_pos, should_step=True, *args, **kwargs):
+    def step(self, set_pos, *args, **kwargs):
         # No clipping because the arm is being set to exactly where it needs to
         # go.
         self._sim: RearrangeSim
         self._sim.robot.arm_motor_pos = set_pos
-        if should_step:
-            return self._sim.step(HabitatSimActions.ARM_ABS_POS)
-        else:
-            return None
 
 
 @registry.register_task_action
@@ -211,15 +212,11 @@ class ArmAbsPosKinematicAction(SimulatorTaskAction):
             dtype=np.float32,
         )
 
-    def step(self, set_pos, should_step=True, *args, **kwargs):
+    def step(self, set_pos, *args, **kwargs):
         # No clipping because the arm is being set to exactly where it needs to
         # go.
         self._sim: RearrangeSim
         self._sim.robot.arm_joint_pos = set_pos
-        if should_step:
-            return self._sim.step(HabitatSimActions.ARM_ABS_POS_KINEMATIC)
-        else:
-            return None
 
 
 @registry.register_task_action
@@ -303,10 +300,9 @@ class BaseVelAction(SimulatorTaskAction):
                 self._set_robot_state(self._sim, before_trans_state)
                 self._sim.robot.sim_obj.transformation = trans
 
-    def step(self, base_vel, should_step=True, *args, **kwargs):
+    def step(self, base_vel, *args, is_last_action, **kwargs):
         lin_vel, ang_vel = base_vel
-        lin_vel = np.clip(lin_vel, -1, 1)
-        lin_vel *= self._config.LIN_SPEED
+        lin_vel = np.clip(lin_vel, -1, 1) * self._config.LIN_SPEED
         ang_vel = np.clip(ang_vel, -1, 1) * self._config.ANG_SPEED
         if not self._config.ALLOW_BACK:
             lin_vel = np.maximum(lin_vel, 0)
@@ -324,10 +320,10 @@ class BaseVelAction(SimulatorTaskAction):
         if lin_vel != 0.0 or ang_vel != 0.0:
             self.update_base()
 
-        if should_step:
+        if is_last_action:
             return self._sim.step(HabitatSimActions.BASE_VELOCITY)
         else:
-            return None
+            return {}
 
 
 @registry.register_task_action
@@ -374,7 +370,7 @@ class ArmEEAction(SimulatorTaskAction):
         des_joint_pos = list(des_joint_pos)
         self._sim.robot.arm_motor_pos = des_joint_pos
 
-    def step(self, ee_pos, should_step=True, **kwargs):
+    def step(self, ee_pos, **kwargs):
         ee_pos = np.clip(ee_pos, -1, 1)
         ee_pos *= self._config.EE_CTRL_LIM
         self.set_desired_ee_pos(ee_pos)
@@ -386,8 +382,3 @@ class ArmEEAction(SimulatorTaskAction):
             self._sim.viz_ids["ee_target"] = self._sim.visualize_position(
                 global_pos, self._sim.viz_ids["ee_target"]
             )
-
-        if should_step:
-            return self._sim.step(HabitatSimActions.ARM_EE)
-        else:
-            return None

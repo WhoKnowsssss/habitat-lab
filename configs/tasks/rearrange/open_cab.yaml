@@ -18,7 +18,7 @@ TASK:
     SPAWN_REGION_SCALE: 0.2
     # -1 does not change the max impulse
     JOINT_MAX_IMPULSE: -1.0
-    CONSTRAINT_VIOLATION_ENDS_EPISODE: False
+    CONSTRAINT_VIOLATION_ENDS_EPISODE: True
 
     # Standard deviation of the noise to add to the arm starting position.
 
@@ -36,7 +36,7 @@ TASK:
     JOINT_SENSOR:
         TYPE: "JointSensor"
         DIMENSIONALITY: 7
-    JOINT_VEL_SENSOR:
+    JOINT_VELOCITY_SENSOR:
         TYPE: "JointVelocitySensor"
         DIMENSIONALITY: 7
     END_EFFECTOR_SENSOR:
@@ -50,13 +50,13 @@ TASK:
     RELATIVE_RESTING_POS_SENSOR:
         TYPE: "RelativeRestingPositionSensor"
 
-    SENSORS: ["JOINT_SENSOR", "JOINT_VEL_SENSOR", "IS_HOLDING_SENSOR", "END_EFFECTOR_SENSOR", "ART_JOINT_SENSOR", "MARKER_REL_POS_SENSOR", "RELATIVE_RESTING_POS_SENSOR"]
+    SENSORS: ["JOINT_SENSOR", "JOINT_VELOCITY_SENSOR", "IS_HOLDING_SENSOR", "END_EFFECTOR_SENSOR", "ART_JOINT_SENSOR", "MARKER_REL_POS_SENSOR", "RELATIVE_RESTING_POS_SENSOR"]
 
 
     ROBOT_FORCE:
         TYPE: "RobotForce"
         MIN_FORCE: 20.0
-    EXCESSIVE_FORCE_SHOULD_END:
+    FORCE_TERMINATE:
         TYPE: "ForceTerminate"
         MAX_ACCUM_FORCE: -1.0
     ROBOT_COLLS:
@@ -88,20 +88,22 @@ TASK:
         ART_AT_DESIRED_STATE_REWARD: 5.0
 
         MARKER_DIST_REWARD: 1.0
-        EE_DIST_REWARD: 1.0
+        EE_DIST_REWARD: 10.0
         ART_DIST_REWARD: 10.0
 
         # General Rearrange Reward config
-        CONSTRAINT_VIOLATE_PEN: 0.0
+        CONSTRAINT_VIOLATE_PEN: 1.0
         FORCE_PEN: 0.0
         MAX_FORCE_PEN: 1.0
         FORCE_END_PEN: 10.0
     NUM_STEPS:
         TYPE: "NumStepsMeasure"
+    DID_VIOLATE_HOLD_CONSTRAINT:
+        TYPE: "DidViolateHoldConstraintMeasure"
 
     MEASUREMENTS:
         - "ROBOT_FORCE"
-        - "EXCESSIVE_FORCE_SHOULD_END"
+        - "FORCE_TERMINATE"
         - "ROBOT_COLLS"
         - "END_EFFECTOR_TO_REST_DISTANCE"
         - "EE_DIST_TO_MARKER"
@@ -110,6 +112,7 @@ TASK:
         - "ART_OBJ_SUCCESS"
         - "ART_OBJ_REWARD"
         - "NUM_STEPS"
+        - "DID_VIOLATE_HOLD_CONSTRAINT"
 
     ACTIONS:
         ARM_ACTION:

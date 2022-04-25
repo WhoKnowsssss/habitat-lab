@@ -24,8 +24,6 @@ TASK:
     OBJ_SUCC_THRESH: 0.3
     ART_SUCC_THRESH: 0.15
     SINGLE_EVAL_NODE: -1
-    LIMIT_TASK_NODE: -1
-    LIMIT_TASK_LEN_SCALING: 0.0
     DEBUG_SKIP_TO_NODE: -1
     SKIP_NODES:
     - move_obj
@@ -62,23 +60,20 @@ TASK:
         TYPE: OracleNavigationActionSensor
     NAV_GOAL_SENSOR:
         TYPE: NavGoalSensor
+    MARKER_REL_POS_SENSOR:
+        TYPE: MarkerRelPosSensor
     SENSORS:
     - TARGET_START_SENSOR
     - GOAL_SENSOR
-    - ABS_GOAL_SENSOR
     - JOINT_SENSOR
     - IS_HOLDING_SENSOR
     - END_EFFECTOR_SENSOR
     - RELATIVE_RESTING_POS_SENSOR
-    - DIST_TO_NAV_GOAL
-    - ROT_DIST_TO_NAV_GOAL
-    - ORACLE_NAV_ACTION_SENSOR
-    - ABS_TARGET_START_SENSOR
-    - LOCALIZATION_SENSOR
-    - NAV_GOAL_SENSOR
-    EXCESSIVE_FORCE_SHOULD_END:
+    - TARGET_START_POINT_GOAL_SENSOR
+    - MARKER_REL_POS_SENSOR
+    FORCE_TERMINATE:
         TYPE: ForceTerminate
-        MAX_ACCUM_FORCE: 100000.0
+        MAX_ACCUM_FORCE: -1.0
     ROBOT_FORCE:
         TYPE: RobotForce
         MIN_FORCE: 20.0
@@ -102,16 +97,11 @@ TASK:
         TYPE: NavToPosSucc
         SUCCESS_DISTANCE: 0.2
     REARRANGE_NAV_TO_OBJ_REWARD:
-        TYPE: "NavToObjReward"
-        # Reward the agent for facing the object?
-        SHOULD_REWARD_TURN: True
-        # What distance do we start giving the reward for facing the object?
+        TYPE: NavToObjReward
+        SHOULD_REWARD_TURN: true
         TURN_REWARD_DIST: 0.6
-        # Multiplier on the angle distance to the goal.
         ANGLE_DIST_REWARD: 1.0
         DIST_REWARD: 10.0
-
-        # General Rearrange Reward config
         CONSTRAINT_VIOLATE_PEN: 10.0
         FORCE_PEN: 0.0
         MAX_FORCE_PEN: 1.0
@@ -119,7 +109,7 @@ TASK:
     REARRANGE_NAV_TO_OBJ_SUCCESS:
         TYPE: NavToObjSuccess
         MUST_LOOK_AT_TARG: true
-        SUCCESS_ANGLE_DIST: 0.3
+        SUCCESS_ANGLE_DIST: 0.7
         HEURISTIC_STOP: false
     PICK_REWARD:
         TYPE: RearrangePickReward
@@ -140,7 +130,7 @@ TASK:
         WRONG_PICK_SHOULD_END: false
     PICK_SUCCESS:
         TYPE: RearrangePickSuccess
-        SUCC_THRESH: 0.15
+        EE_RESTING_SUCCESS_THRESHOLD: 0.2
     COMPOSITE_NODE_IDX:
         TYPE: CompositeNodeIdx
     COMPOSITE_SUCCESS:
@@ -154,7 +144,7 @@ TASK:
     MEASUREMENTS:
     - OBJECT_TO_GOAL_DISTANCE
     - ROBOT_FORCE
-    - EXCESSIVE_FORCE_SHOULD_END
+    - FORCE_TERMINATE
     - ROBOT_COLLS
     - END_EFFECTOR_TO_REST_DISTANCE
     - END_EFFECTOR_TO_OBJECT_DISTANCE
@@ -173,6 +163,12 @@ TASK:
     - COMPOSITE_SUCCESS
     - COMPOSITE_REWARD
     - NUM_STEPS
+    - DID_VIOLATE_HOLD_CONSTRAINT
+    - EE_DIST_TO_MARKER
+    - ART_OBJ_AT_DESIRED_STATE
+    - ART_OBJ_STATE
+    - ART_OBJ_SUCCESS
+    - ART_OBJ_REWARD
     ACTIONS:
         ARM_ACTION:
             TYPE: ArmAction
@@ -218,8 +214,34 @@ TASK:
     PLACE_SUCCESS:
         TYPE: PlaceSuccess
         SUCC_THRESH: 0.15
-    ROT_DIST_TO_NAV_GOAL:
-        TYPE: NavRotToGoalSensor
+    TARGET_START_POINT_GOAL_SENSOR:
+        TYPE: TargetOrGoalStartPointGoalSensor
+    ART_OBJ_STATE:
+        TYPE: ArtObjState
+    EE_DIST_TO_MARKER:
+        TYPE: EndEffectorDistToMarker
+    ART_OBJ_AT_DESIRED_STATE:
+        TYPE: ArtObjAtDesiredState
+        USE_ABSOLUTE_DISTANCE: false
+        SUCCESS_DIST_THRESHOLD: 0.05
+    ART_OBJ_SUCCESS:
+        TYPE: ArtObjSuccess
+        REST_DIST_THRESHOLD: 0.2
+    ART_OBJ_REWARD:
+        TYPE: ArtObjReward
+        WRONG_GRASP_END: false
+        WRONG_GRASP_PEN: 5.0
+        GRASP_REWARD: 5.0
+        ART_AT_DESIRED_STATE_REWARD: 5.0
+        MARKER_DIST_REWARD: 1.0
+        EE_DIST_REWARD: 10.0
+        ART_DIST_REWARD: 10.0
+        CONSTRAINT_VIOLATE_PEN: 1.0
+        FORCE_PEN: 0.0
+        MAX_FORCE_PEN: 1.0
+        FORCE_END_PEN: 10.0
+    DID_VIOLATE_HOLD_CONSTRAINT:
+        TYPE: DidViolateHoldConstraintMeasure
 SIMULATOR:
     ACTION_SPACE_CONFIG: v0
     GRASP_IMPULSE: 1000.0
