@@ -42,6 +42,7 @@ class RolloutStorage:
             )
 
         self.buffers["rewards"] = torch.zeros(numsteps + 1, num_envs, 1)
+        self.buffers["cumulative_rewards"] = torch.zeros(numsteps + 1, num_envs, 1)
         self.buffers["returns"] = torch.zeros(numsteps + 1, num_envs, 1)
 
         if action_shape is None:
@@ -65,7 +66,7 @@ class RolloutStorage:
         )
 
         self.buffers["timesteps"] = torch.ones(
-            numsteps + 1, num_envs, 1
+            numsteps + 1, num_envs, 1, dtype=torch.int64
         )
 
         self.is_double_buffered = is_double_buffered
@@ -93,6 +94,7 @@ class RolloutStorage:
         next_observations=None,
         actions=None,
         rewards=None,
+        cumulative_rewards=None,
         next_masks=None,
         timesteps=None,
         buffer_index: int = 0,
@@ -103,6 +105,7 @@ class RolloutStorage:
         next_step = dict(
             observations=next_observations,
             masks=next_masks,
+            cumulative_rewards=cumulative_rewards,
         )
 
         current_step = dict(
@@ -137,12 +140,13 @@ class RolloutStorage:
         self.current_rollout_step_idxs[buffer_index] += 1
 
     def after_update(self):
+        for i in range(self._num_envs):
+            self.buffers[0, i] = self.buffers[self.done_idxs[i][-1], i]
         self.current_rollout_step_idxs = [
             0 for _ in self.current_rollout_step_idxs
         ]
 
     def compute_returns(self, gamma=1.0):
-        assert torch.all(self.buffers["masks"][self.current_rollout_step_idx] == False), "Episode not finished.. bug?"
         for step in reversed(range(self.current_rollout_step_idx)):
             self.buffers["returns"][step] = (
                 gamma
@@ -152,41 +156,23 @@ class RolloutStorage:
             )
         self.done_idxs = []
         for i in range(self._num_envs):
-            self.done_idxs.append(torch.argwhere(self.buffers["masks"][:,i] == False))
+            self.done_idxs.append(torch.nonzero(self.buffers["masks"][1:,i].squeeze() == False).squeeze(-1) + 1)
 
     def recurrent_generator(
         self, num_mini_batch, block_size
     ) -> Iterator[TensorDict]:
         num_environments = self._num_envs
-        assert num_environments >= num_mini_batch, (
-            "Trainer requires the number of environments ({}) "
-            "to be greater than or equal to the number of "
-            "trainer mini batches ({}).".format(
-                num_environments, num_mini_batch
-            )
-        )
-        if num_environments % num_mini_batch != 0:
-            warnings.warn(
-                "Number of environments ({}) is not a multiple of the"
-                " number of mini batches ({}).  This results in mini batches"
-                " of different sizes, which can harm training performance.".format(
-                    num_environments, num_mini_batch
-                )
-            )
         
-        indices = torch.stack([torch.randperm(self.current_rollout_step_idx-1) for _ in range(num_environments)])
-        for inds in indices.chunk(num_mini_batch//num_environments, dim=-1):
-            done_idx = torch.zeros_like(inds)
-            start_idx = torch.zeros_like(inds)
-            for i in range(self._num_envs):
-                done_idx[i] = self.done_idxs[i][torch.searchsorted(self.done_idxs[i], inds[i])]
-                done_idx[i] = torch.min(done_idx[i], inds[i] + block_size)
-                start_idx[i] = done_idx[i] - block_size
-            done_idx = done_idx.flatten()
-            start_idx = start_idx.flatten()
+        indices = torch.cat([torch.stack((torch.randperm(self.done_idxs[i][-1]), torch.ones(self.done_idxs[i][-1], dtype=torch.int32) * i)) for i in range(num_environments)], dim=-1)
+        indices = indices.chunk((indices.shape[-1] // num_mini_batch) + 1, dim=-1)
+
+        for inds in indices:
             batch = []
-            for i in range(np.multiply(*inds.shape)):
-                batch.append(self.buffers[start_idx[i] : done_idx[i], i % num_environments])
+            for i,j in zip(inds[0], inds[1]):
+                done_idx = self.done_idxs[j][torch.searchsorted(self.done_idxs[j].cpu(), i)]
+                done_idx = torch.min(done_idx, i + block_size)
+                start_idx = done_idx - block_size
+                batch.append(self.buffers[start_idx : done_idx, j])
 
             yield batch
 

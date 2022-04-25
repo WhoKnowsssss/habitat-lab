@@ -217,6 +217,7 @@ class GPT(nn.Module):
         # timesteps: (batch, 1, 1)
         # attention_mask: (batch, block_size)
 
+        assert states.shape[1] == actions.shape[1] and actions.shape[1] == rtgs.shape[1], "Dimension must match"
 
         state_inputs = list(torch.split(states,[self.n_embd, self.n_embd//2,self.config.num_states[1]], -1))
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
@@ -230,7 +231,7 @@ class GPT(nn.Module):
             actions = actions.type(torch.float32)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
-            token_embeddings = torch.zeros((states.shape[0], self.config.block_size, self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
+            token_embeddings = torch.zeros((states.shape[0], self.num_inputs * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
             
             token_embeddings[:,::self.num_inputs,:] = rtg_embeddings
 
@@ -262,6 +263,8 @@ class GPT(nn.Module):
         batch_size = states.shape[0]
         all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
 
+        print(timesteps) 
+        a = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1))
         position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
 
         x = self.drop(token_embeddings + position_embeddings)
@@ -294,7 +297,7 @@ class GPT(nn.Module):
         logits[:,:,:8] = logits_arm
         # logits[:,:,7:8] = logits_pick
         # logits[:,:,7] = torch.argmax(logits_pick, dim=-1) - 1
-        logits[:,:,7] = logits[:,:,7] - 0.1
+        logits[:,:,7] = logits[:,:,7]
         logits[:,:,8] = logits_loc == 1
         logits[:,:,9] = logits_loc - 1
         logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0

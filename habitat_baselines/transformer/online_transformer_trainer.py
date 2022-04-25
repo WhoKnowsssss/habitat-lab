@@ -30,7 +30,7 @@ from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_obs_space,
     get_active_obs_transforms,
 )
-from habitat_baselines.common.rollout_storage import RolloutStorage
+from habitat_baselines.transformer.transformer_rollout_storage import RolloutStorage
 from habitat_baselines.common.tensorboard_utils import (
     TensorboardWriter,
     get_writer,
@@ -65,9 +65,8 @@ from habitat_baselines.utils.env_utils import construct_envs
 from habitat_baselines.utils.render_wrapper import overlay_frame
 
 
-@baseline_registry.register_trainer(name="ddppo")
-@baseline_registry.register_trainer(name="ppo")
-class PPOTrainer(BaseRLTrainer):
+@baseline_registry.register_trainer(name="online_transformer")
+class OnlineTransformerTrainer(BaseRLTrainer):
     r"""Trainer class for PPO algorithm
     Paper: https://arxiv.org/abs/1707.06347.
     """
@@ -255,11 +254,21 @@ class PPOTrainer(BaseRLTrainer):
             # For navigation using a continuous action space for a task that
             # may be asking for discrete actions
             self.policy_action_space = action_space["VELOCITY_CONTROL"]
+            action_shape = (2,)
+            discrete_actions = False
         else:
             self.policy_action_space = action_space
+            if is_continuous_action_space(action_space):
+                # Assume ALL actions are NOT discrete
+                action_shape = (get_num_actions(action_space),)
+                discrete_actions = False
+            else:
+                # For discrete pointnav
+                action_shape = None
+                discrete_actions = True
 
         obs_space = self.obs_space
-        storage_cfg = self.config.RL.RolloutStorage
+        storage_cfg = self.config.RL.ROLLOUT_STORAGE
         
         self._setup_transformer_policy()
 
@@ -276,12 +285,10 @@ class PPOTrainer(BaseRLTrainer):
         self._nbuffers = 2 if storage_cfg.use_double_buffered_sampler else 1
 
         self.rollouts = RolloutStorage(
-            storage_cfg.num_steps,
+            self.config.TASK_CONFIG.ENVIRONMENT.MAX_EPISODE_STEPS,
             self.envs.num_envs,
             obs_space,
             self.policy_action_space,
-            storage_cfg.hidden_size,
-            num_recurrent_layers=self.actor_critic.net.num_recurrent_layers,
             is_double_buffered=storage_cfg.use_double_buffered_sampler,
             action_shape=action_shape,
             discrete_actions=discrete_actions,
@@ -296,8 +303,8 @@ class PPOTrainer(BaseRLTrainer):
 
         self.rollouts.buffers["observations"][0] = batch  # type: ignore
 
-        self.current_episode_reward = torch.ones(self.envs.num_envs, 1)
-        self.current_timesteps = torch.zeros(self.envs.num_envs, 1)
+        self.current_episode_reward = torch.zeros((self.envs.num_envs, 1), device=self.device)
+        self.current_timesteps = torch.zeros((self.envs.num_envs, 1), dtype=torch.int64, device=self.device)
 
 
         self.running_episode_stats = dict(
@@ -305,8 +312,9 @@ class PPOTrainer(BaseRLTrainer):
             reward=torch.zeros(self.envs.num_envs, 1),
         )
         self.window_episode_stats = defaultdict(
-            lambda: deque(maxlen=ppo_cfg.reward_window_size)
+            lambda: deque(maxlen=self.config.RL.TRANSFORMER.reward_window_size)
         )
+        self.num_episodes_collected = 0
 
         self.optimizer = torch.optim.Adam(
             list(filter(lambda p: p.requires_grad, self.transformer_policy.parameters())),
@@ -424,24 +432,24 @@ class PPOTrainer(BaseRLTrainer):
         with torch.no_grad():
             step_batch = self.rollouts.buffers[
                 slice(
-                    self.rollouts.current_rollout_step_idxs[buffer_index]-self.config.RL.TRANSFORMER.context_length,
-                    self.rollouts.current_rollout_step_idxs[buffer_index]
+                    max(0, self.rollouts.current_rollout_step_idxs[buffer_index] - self.config.RL.TRANSFORMER.context_length + 1),
+                    self.rollouts.current_rollout_step_idxs[buffer_index] + 1
                 ),
                 env_slice,
             ]
 
             profiling_wrapper.range_push("compute actions")
             
-            step_batch = default_collate(step_batch)
             current_timesteps = self.current_timesteps[env_slice]
+            valid_context = torch.min(torch.ones_like(current_timesteps) * self.config.RL.TRANSFORMER.context_length, current_timesteps + 1)
 
             actions = self.transformer_policy.act(
-                step_batch["observations"],
-                prev_actions=step_batch["actions"],
-                target=None,
-                rtgs=self.config.RL.TRANSFORMER.return_to_go - self.current_episode_reward[env_slice], 
-                timesteps=current_timesteps,
-                valid_context=step_batch["timesteps"],
+                {k: step_batch["observations"][k].transpose(1,0) for k in step_batch["observations"].keys()},
+                prev_actions=step_batch["actions"].transpose(1,0),
+                targets=None,
+                rtgs=self.config.RL.TRANSFORMER.return_to_go - step_batch["cumulative_rewards"].transpose(1,0), 
+                timesteps=current_timesteps.unsqueeze(-1),
+                valid_context=valid_context.squeeze(),
             )
 
         # NB: Move actions to CPU.  If CUDA tensors are
@@ -507,6 +515,9 @@ class PPOTrainer(BaseRLTrainer):
         )
         rewards = rewards.unsqueeze(1)
 
+        self.num_episodes_collected += sum(dones)
+        if self.num_episodes_collected == 1:
+            a=0
         not_done_masks = torch.tensor(
             [[not done] for done in dones],
             dtype=torch.bool,
@@ -515,10 +526,11 @@ class PPOTrainer(BaseRLTrainer):
         done_masks = torch.logical_not(not_done_masks)
 
         self.current_episode_reward[env_slice] += rewards
+        current_rewards = self.current_episode_reward[env_slice]
         self.current_timesteps[env_slice] += 1
         current_ep_reward = self.current_episode_reward[env_slice]
-        self.running_episode_stats["reward"][env_slice] += current_ep_reward.where(done_masks, current_ep_reward.new_zeros(()))  # type: ignore
-        self.running_episode_stats["count"][env_slice] += done_masks.float()  # type: ignore
+        self.running_episode_stats["reward"][env_slice] += current_ep_reward.where(done_masks, torch.zeros_like(current_ep_reward)).cpu()  # type: ignore
+        self.running_episode_stats["count"][env_slice] += done_masks.float().cpu()   # type: ignore
         for k, v_k in self._extract_scalars_from_infos(infos).items():
             v = torch.tensor(
                 v_k,
@@ -530,18 +542,19 @@ class PPOTrainer(BaseRLTrainer):
                     self.running_episode_stats["count"]
                 )
 
-            self.running_episode_stats[k][env_slice] += v.where(done_masks, v.new_zeros(()))  # type: ignore
-
-        self.current_episode_reward[env_slice].masked_fill_(done_masks, 0.0)
-        self.current_timesteps[env_slice].masked_fill_(done_masks, 1)
+            self.running_episode_stats[k][env_slice] += v.where(done_masks, torch.zeros_like(v)).cpu()  # type: ignore
 
         if self._static_encoder:
             with torch.no_grad():
                 batch["visual_features"] = self._encoder(batch)
 
+        self.current_episode_reward[env_slice].masked_fill_(done_masks, 0.0)
+        self.current_timesteps[env_slice].masked_fill_(done_masks, 0)
+        
         self.rollouts.insert(
             next_observations=batch,
             rewards=rewards,
+            cumulative_rewards=current_rewards,
             next_masks=not_done_masks,
             buffer_index=buffer_index,
         )
@@ -558,14 +571,14 @@ class PPOTrainer(BaseRLTrainer):
         return self._collect_environment_result()
 
     @profiling_wrapper.RangeContext("_update_agent")
-    def _update_agent(self, epoch_num):
+    def _update_agent(self):
         t_update_model = time.time()
 
         self.rollouts.compute_returns()
 
         self.transformer_policy.train()
 
-        data_generator = self.rollouts.recurrent_generator(self.config.RL.TRANSFORMER.batch_size)
+        data_generator = self.rollouts.recurrent_generator(self.config.RL.TRANSFORMER.batch_size, self.config.RL.TRANSFORMER.context_length)
 
         losses = []
         for it, batch in enumerate(data_generator):
@@ -576,19 +589,17 @@ class PPOTrainer(BaseRLTrainer):
                 batch["actions"],
                 batch["actions"],
                 batch["returns"],
-                batch["timestamps"],
+                batch["timesteps"][:,-1:,:],
             )
-
-            
 
             self.optimizer.zero_grad()
             torch.nn.utils.clip_grad_norm_(self.transformer_policy.parameters(), self.config.RL.TRANSFORMER.grad_norm_clip)
             self.optimizer.step()
 
             # report progress
-            loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
+            loss = loss.detach().mean() # collapse all losses if they are scattered on multiple gpus
             if rank0_only():
-                print(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
+                print(f"epoch {self.num_updates_done+1} iter {it}: train loss {loss.item():.5f}.")
             losses.append(loss)
         losses = torch.mean(torch.stack(losses))
 
@@ -760,8 +771,6 @@ class PPOTrainer(BaseRLTrainer):
             #     requeue_stats["window_episode_stats"]
             # )
 
-        ppo_cfg = self.config.RL.PPO
-
         with (
             get_writer(self.config, flush_secs=self.flush_secs)
             if rank0_only()
@@ -770,9 +779,6 @@ class PPOTrainer(BaseRLTrainer):
             while not self.is_done():
                 profiling_wrapper.on_start_step()
                 profiling_wrapper.range_push("train update")
-
-                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
-                    lr_scheduler.step()  # type: ignore
 
                 if rank0_only() and self._should_save_resume_state():
                     # requeue_stats = dict(
@@ -814,11 +820,8 @@ class PPOTrainer(BaseRLTrainer):
                 for buffer_index in range(self._nbuffers):
                     self._compute_actions_and_step_envs(buffer_index)
 
-                for step in range(ppo_cfg.num_steps):
-                    is_last_step = (
-                        self.should_end_early(step + 1)
-                        or (step + 1) == ppo_cfg.num_steps
-                    )
+                not_done = True
+                while not_done:
 
                     for buffer_index in range(self._nbuffers):
                         count_steps_delta += self._collect_environment_result(
@@ -828,16 +831,17 @@ class PPOTrainer(BaseRLTrainer):
                         if (buffer_index + 1) == self._nbuffers:
                             profiling_wrapper.range_pop()  # _collect_rollout_step
 
-                        if not is_last_step:
-                            if (buffer_index + 1) == self._nbuffers:
-                                profiling_wrapper.range_push(
-                                    "_collect_rollout_step"
-                                )
+                        if (buffer_index + 1) == self._nbuffers:
+                            profiling_wrapper.range_push(
+                                "_collect_rollout_step"
+                            )
 
-                            self._compute_actions_and_step_envs(buffer_index)
+                        if self.num_episodes_collected >= self.config.RL.ROLLOUT_STORAGE.num_trajs:
+                            self.num_episodes_collected = 0
+                            not_done = False
+                            break
 
-                    if is_last_step:
-                        break
+                        self._compute_actions_and_step_envs(buffer_index)
 
                 profiling_wrapper.range_pop()  # rollouts loop
 
@@ -846,7 +850,7 @@ class PPOTrainer(BaseRLTrainer):
 
                 loss = self._update_agent()
 
-                if ppo_cfg.use_linear_lr_decay:
+                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
                     lr_scheduler.step()  # type: ignore
 
                 self.num_updates_done += 1

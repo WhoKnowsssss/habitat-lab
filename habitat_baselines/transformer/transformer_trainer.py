@@ -17,6 +17,7 @@ import wandb
 
 import numpy as np
 import torch
+from torch.utils.data._utils.collate import default_collate
 from tqdm import tqdm
 from gym import spaces
 from torch import device, nn
@@ -34,6 +35,7 @@ from habitat.utils.visualizations.utils import observations_to_image
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.environments import get_env_class
+from habitat_baselines.common.tensor_dict import TensorDict
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
     apply_obs_transforms_obs_space,
@@ -488,7 +490,8 @@ class TransformerTrainer(BaseRLTrainer):
 
             # place data on the correct device
 
-            x = [{idx2: x[idx1][idx2].to(self.device) for idx2 in x[idx1].keys()} for idx1 in range(len(x))]
+            x = default_collate(x)
+            x = {idx: x[idx].to(self.device) for idx in x.keys()}
 
             y = y.to(self.device).squeeze(-2)
             r = r.to(self.device).squeeze(-2)
@@ -499,7 +502,7 @@ class TransformerTrainer(BaseRLTrainer):
                 # logits, loss = model(x, y, r)
                 loss = self.transformer_policy(x, y, y, r, t)
                 loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
-                losses.append(loss)
+                losses.append(loss.detach())
 
             if is_train:
 
@@ -713,13 +716,13 @@ class TransformerTrainer(BaseRLTrainer):
         if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
             prefix = "module."
         
-        self.transformer_policy.load_state_dict(
-            {
-                k[k.find(prefix) + len(prefix) :]: v
-                for k, v in ckpt_dict["state_dict"].items()
-                if prefix in k and ("action_distri" not in k) and ("critic" not in k)
-            }
-        )
+        # self.transformer_policy.load_state_dict(
+        #     {
+        #         k[k.find(prefix) + len(prefix) :]: v
+        #         for k, v in ckpt_dict["state_dict"].items()
+        #         if prefix in k and ("action_distri" not in k) and ("critic" not in k)
+        #     }
+        # )
 
         observations = self.envs.reset()
         batch = batch_obs(
@@ -810,11 +813,12 @@ class TransformerTrainer(BaseRLTrainer):
         ):
             current_episodes = self.envs.current_episodes()
             with torch.no_grad(): 
+                obs = default_collate(batch_list)
                 actions = self.transformer_policy.act(
-                    batch_list,
-                    prev_actions=prev_actions,
+                    {k: obs[k].transpose(1,0) for k in obs.keys()},
+                    prev_actions=prev_actions[:,-len(batch_list):,:],
                     targets=None, 
-                    rtgs=rtgs, 
+                    rtgs=rtgs[:,-len(batch_list):,:], 
                     timesteps=timesteps,
                     valid_context=valid_context,
                 )
