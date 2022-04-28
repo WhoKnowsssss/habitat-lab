@@ -131,7 +131,8 @@ class GPT(nn.Module):
         self.head = nn.Linear(config.n_embd, 4, bias=False)
         self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
         self.head_3 = nn.Linear(config.n_embd, 3, bias=False)
-
+        self.head_4 = nn.Linear(config.n_embd, 1, bias=False)
+        
         self.apply(self._init_weights)
 
 
@@ -263,7 +264,6 @@ class GPT(nn.Module):
         batch_size = states.shape[0]
         all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
 
-        print(timesteps) 
         a = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1))
         position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
 
@@ -275,6 +275,8 @@ class GPT(nn.Module):
             logits_loc = self.head(x[:, (self.num_inputs-2)::self.num_inputs, :]) # only keep predictions from state_embeddings
             logits_arm = self.head_2(x[:, (self.num_inputs-2)::self.num_inputs, :])
             logits_pick = self.head_3(x[:, (self.num_inputs-2)::self.num_inputs, :])
+            logits_stop = self.head_4(x[:, (self.num_inputs-2)::self.num_inputs, :])
+            logits_stop = F.sigmoid(logits_stop)
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -287,8 +289,10 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
-            loss += F.mse_loss(logits_arm, targets[:,:,:8])
+            loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
+            loss2 = F.mse_loss(logits_arm, targets[:,:,:8])
+            loss = loss1 + loss2
+            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item()}
             # loss = F.cross_entropy(logits_pick.permute(0,2,1), 3 * (targets[:,:,7] > 0) + (targets[:,:,7] < 0) + 2 * (targets[:,:,7] == 0) - 1)
             # loss += F.binary_cross_entropy_with_logits(logits_pick, F.sigmoid(targets[:,:,7]).unsqueeze(-1))
 
@@ -301,5 +305,5 @@ class GPT(nn.Module):
         logits[:,:,8] = logits_loc == 1
         logits[:,:,9] = logits_loc - 1
         logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
-        logits[:,:,-1] = 0
-        return logits, loss
+        logits[:,:,-1:] = torch.round(logits_stop)
+        return logits, loss, loss_dict

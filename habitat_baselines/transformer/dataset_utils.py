@@ -6,10 +6,12 @@ from collections import deque
 
 import numpy as np
 import torch
+from torch.utils.data._utils.collate import default_collate
 import numba
 
 
 from habitat import Config, logger 
+from habitat_baselines.common.tensor_dict import TensorDict
         
 
 def read_dataset(
@@ -117,7 +119,10 @@ def read_dataset(
             )
         )
 
-
+    obss = TensorDict.from_tree(default_collate(obss))
+    actions = torch.from_numpy(actions).to(torch.float32)
+    rtg = torch.from_numpy(rtg).to(torch.float32)
+    timesteps = torch.from_numpy(timesteps).to(torch.int64)
     return obss, actions, done_idxs, rtg, timesteps
 
 @numba.jit(nopython=True, parallel=True)
@@ -144,7 +149,7 @@ def producer(
     verbose: bool,
 ):
     while True:
-        if len(deque) < 2:
+        if len(deque) < 1:
             deque.append(read_dataset(config, verbose, rng))
             time.sleep(3)
         else:

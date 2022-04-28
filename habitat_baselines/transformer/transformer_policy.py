@@ -118,7 +118,7 @@ class TransformerResNetPolicy(nn.Module, Policy):
         valid_context=None,
     ):
         self.net.eval()
-        logits, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
+        logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
 
         logits = logits[range(logits.shape[0]), valid_context-1]
         return logits
@@ -131,9 +131,9 @@ class TransformerResNetPolicy(nn.Module, Policy):
         rtgs,
         timesteps,
     ):
-        _, loss = self.net(states, prev_actions=actions, targets=targets, rtgs=rtgs, timesteps=timesteps)
+        _, loss, loss_dict = self.net(states, prev_actions=actions, targets=targets, rtgs=rtgs, timesteps=timesteps)
 
-        return loss
+        return loss, loss_dict
 
 class Net(nn.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
@@ -365,7 +365,8 @@ class TransformerResnetNet(Net):
         
         x = []
         B = prev_actions.shape[0]
-        observations = {k: observations[k].reshape(-1, *observations[k].shape[2:]) for k in observations.keys()}
+        if observations[list(observations.keys())[0]].shape[0] == B:
+            observations = {k: observations[k].reshape(-1, *observations[k].shape[2:]) for k in observations.keys()}
 
         if not self.is_blind:
             if "visual_features" in observations:
@@ -498,8 +499,8 @@ class TransformerResnetNet(Net):
                 rtgs_[i,:current_context[i],:] = rtgs[i,-current_context[i]:,:]
                 prev_actions_[i,:current_context[i],:] = prev_actions[i,-current_context[i]:,:]
                 outs_[i,:current_context[i],:] = outs[i,-current_context[i]:,:]
-            logits, loss = self.state_encoder(outs_, prev_actions_, rtgs=rtgs_, timesteps=timesteps)
+            logits, loss, loss_dict = self.state_encoder(outs_, prev_actions_, rtgs=rtgs_, timesteps=timesteps)
         else:
-            logits, loss = self.state_encoder(outs, prev_actions, targets=prev_actions, rtgs=rtgs, timesteps=timesteps)
+            logits, loss, loss_dict = self.state_encoder(outs, prev_actions, targets=prev_actions, rtgs=rtgs, timesteps=timesteps)
 
-        return logits, loss
+        return logits, loss, loss_dict

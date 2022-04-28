@@ -290,9 +290,13 @@ class TransformerTrainer(BaseRLTrainer):
                                 rank0_only()
                             )
             
+        def collate_fn(data):
+            return self.train_dataset.get_batch()
+        
         self.train_loader = DataLoader(self.train_dataset, pin_memory=True,
                                 batch_size=self.config.RL.TRANSFORMER.batch_size,
                                 num_workers=self.config.RL.TRANSFORMER.num_workers, 
+                                collate_fn=collate_fn,
                                 persistent_workers=True
                             )
 
@@ -487,22 +491,19 @@ class TransformerTrainer(BaseRLTrainer):
         pbar = tqdm(enumerate(self.train_loader)) # #  # if is_train else enumerate(self.train_loader)
         losses = []
         for it, (x, y, r, t) in pbar:
-
             # place data on the correct device
 
-            x = default_collate(x)
-            x = {idx: x[idx].to(self.device) for idx in x.keys()}
-
-            y = y.to(self.device).squeeze(-2)
-            r = r.to(self.device).squeeze(-2)
+            x = TensorDict.from_tree(x).map_in_place(lambda v: v.to(self.device))
+            y = y.to(self.device)
+            r = r.to(self.device)
             t = t.to(self.device)
 
             # forward the model
             with torch.set_grad_enabled(is_train):
                 # logits, loss = model(x, y, r)
-                loss = self.transformer_policy(x, y, y, r, t)
+                loss, loss_dict = self.transformer_policy(x, y, y, r, t)
                 loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
-                losses.append(loss.detach())
+                losses.append(loss_dict)
 
             if is_train:
 
@@ -511,12 +512,11 @@ class TransformerTrainer(BaseRLTrainer):
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.transformer_policy.parameters(), self.config.RL.TRANSFORMER.grad_norm_clip)
                 self.optimizer.step()
-
                 # report progress
                 if rank0_only():
-                    pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.item():.5f}.")
+                    pbar.set_description(f"epoch {epoch_num+1} iter {it}: train loss {loss.detach().item():.5f}.")  
 
-        losses = torch.mean(torch.stack(losses))
+        losses = {k: np.mean([d[k] for d in losses]) for k in loss_dict.keys()}
         print("LR:::", self.optimizer.param_groups[0]['lr'])
         return losses
 
@@ -584,9 +584,6 @@ class TransformerTrainer(BaseRLTrainer):
                 profiling_wrapper.on_start_step()
                 profiling_wrapper.range_push("train update")
 
-                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
-                    lr_scheduler.step()  # type: ignore
-
                 if rank0_only() and self._should_save_resume_state():
                     # requeue_stats = dict(
                     #     env_time=self.env_time,
@@ -620,13 +617,12 @@ class TransformerTrainer(BaseRLTrainer):
       
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 
-                loss = self._all_reduce(loss)
-
-
-
                 self.num_updates_done += 1
 
-                self._training_log(writer, {'loss': loss}, prev_time)
+                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
+                    lr_scheduler.step()  # type: ignore
+
+                self._training_log(writer, loss, prev_time)
 
                 # checkpoint model
                 if rank0_only() and self.should_checkpoint():
@@ -716,13 +712,13 @@ class TransformerTrainer(BaseRLTrainer):
         if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
             prefix = "module."
         
-        # self.transformer_policy.load_state_dict(
-        #     {
-        #         k[k.find(prefix) + len(prefix) :]: v
-        #         for k, v in ckpt_dict["state_dict"].items()
-        #         if prefix in k and ("action_distri" not in k) and ("critic" not in k)
-        #     }
-        # )
+        self.transformer_policy.load_state_dict(
+            {
+                k[k.find(prefix) + len(prefix) :]: v
+                for k, v in ckpt_dict["state_dict"].items()
+                if prefix in k and ("action_distri" not in k) and ("critic" not in k)
+            }
+        )
 
         observations = self.envs.reset()
         batch = batch_obs(

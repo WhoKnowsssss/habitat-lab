@@ -19,6 +19,7 @@ from torch.utils.data import (
 
 from habitat import Config, logger
 from habitat_baselines.transformer.dataset_utils import producer
+from habitat_baselines.common.tensor_dict import TensorDict
 
 class StateActionReturnDataset(Dataset):
 
@@ -32,8 +33,8 @@ class StateActionReturnDataset(Dataset):
         self.timesteps = timesteps
     
     def __len__(self):
-        assert len(self.data) > self.block_size, "No enough transitions in this dataset"
-        return len(self.data) - self.block_size
+        assert len(self.actions) > self.block_size, "No enough transitions in this dataset"
+        return len(self.actions) - self.block_size
 
     def __getitem__(self, idx):
         block_size = self.block_size
@@ -51,6 +52,11 @@ class StateActionReturnDataset(Dataset):
         timesteps = torch.tensor(self.timesteps[idx:idx+1], dtype=torch.int64).unsqueeze(1)
 
         return states, actions, rtgs, timesteps
+
+    def __getindex__(self, idx):
+        block_size = self.block_size
+        done_idx = min(self.done_idxs[np.searchsorted(self.done_idxs, idx)], idx + block_size)
+        return torch.arange(done_idx - block_size, done_idx)
 
     @classmethod
     def from_config(
@@ -101,7 +107,9 @@ class RollingDataset(IterableDataset):
             self.num_iterated_epoch = 0
             self.queue = deque()
             self.producer = None
-            
+            self.temp_times = 0
+            self.batch_idx = []
+
             
         def init_dataset(self):
 
@@ -110,7 +118,7 @@ class RollingDataset(IterableDataset):
             while len(self.queue) == 0:
                 time.sleep(1)
             self.dataset = StateActionReturnDataset.from_config(self.queue.popleft(), self.context_length)
-                  
+
             self.dataset_context['num_init'] += 1
 
             if self._is_distributed:
@@ -120,6 +128,7 @@ class RollingDataset(IterableDataset):
 
         def __iter__(self):
             self.num_iterated_epoch = 0
+            self.batch_idx = []
 
             worker_info = get_worker_info()
             self.num_workers = worker_info.num_workers - 1 if worker_info is not None else 0
@@ -137,7 +146,9 @@ class RollingDataset(IterableDataset):
             # print(f"rank: {self.rank}, {self.dataset_context['need_init_{}'.format(self.id)]}, {len(self.queue)}")
 
             # if self.dataset_context['need_init_{}'.format(self.id)]:
-            self.init_dataset()
+            if self.temp_times % 2 == 0:
+                self.init_dataset()
+            self.temp_times += 1
                 # self.dataset_context['need_init_{}'.format(self.id)] = False
 
             self.sampler_iterator = iter(self.sampler)
@@ -160,15 +171,17 @@ class RollingDataset(IterableDataset):
                 #     for i in range(self.num_workers+1):
                 #         self.dataset_context['need_init_{}'.format(i)] = True
                     
-                
                 raise StopIteration
 
 
 
-            item = self.dataset.__getitem__(idx)
+            # item = self.dataset.__getitem__(idx)
+            idx_list = self.dataset.__getindex__(idx)
+            self.batch_idx.append(idx_list)
+
 
             next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
-            return item
+            return None
 
         def set_epoch(self, epoch):
             if self._is_distributed:
@@ -187,3 +200,14 @@ class RollingDataset(IterableDataset):
 
     def set_epoch(self, epoch):
         self.iterator.set_epoch(epoch)
+
+    def get_batch(self):
+        B = len(self.iterator.batch_idx)
+        batch_idx = torch.cat(self.iterator.batch_idx)
+        self.iterator.batch_idx = []
+        states = self.iterator.dataset.data[batch_idx]
+        actions = self.iterator.dataset.actions[batch_idx] # (block_size, 1)
+        rtgs = self.iterator.dataset.rtgs[batch_idx]
+        timesteps = self.iterator.dataset.timesteps[batch_idx[::self.iterator.context_length]]
+
+        return states, actions.view(B, -1, actions.shape[-1]), rtgs.view(B, -1, 1), timesteps.view(-1,1,1)
