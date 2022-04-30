@@ -153,7 +153,7 @@ class RollingDataset(IterableDataset):
 
             self.sampler_iterator = iter(self.sampler)
 
-            next(its.islice(self.sampler_iterator, self.id, self.id), None)
+            # next(its.islice(self.sampler_iterator, self.id, self.id), None)
             
             return self
 
@@ -170,6 +170,7 @@ class RollingDataset(IterableDataset):
                 #     self.dataset_context['num_iterated'] = 0
                 #     for i in range(self.num_workers+1):
                 #         self.dataset_context['need_init_{}'.format(i)] = True
+                print(self.id, "stoped! ", self.num_iterated_epoch)
                     
                 raise StopIteration
 
@@ -180,7 +181,7 @@ class RollingDataset(IterableDataset):
             self.batch_idx.append(idx_list)
 
 
-            next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
+            # next(its.islice(self.sampler_iterator, self.num_workers, self.num_workers), None)
             return None
 
         def set_epoch(self, epoch):

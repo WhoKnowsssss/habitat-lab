@@ -166,7 +166,7 @@ class TransformerTrainer(BaseRLTrainer):
             )
 
         if self.config.RL.TRANSFORMER.pretrained:
-            prefix = ""
+            prefix = "module."
             self.transformer_policy.load_state_dict(
                 {
                     k[k.find(prefix) + len(prefix) :]: v
@@ -614,13 +614,13 @@ class TransformerTrainer(BaseRLTrainer):
                     return
 
                 self.train_dataset.set_epoch(self.num_updates_done)
+
+                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
+                    lr_scheduler.step()  # type: ignore
       
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 
                 self.num_updates_done += 1
-
-                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
-                    lr_scheduler.step()  # type: ignore
 
                 self._training_log(writer, loss, prev_time)
 
@@ -809,7 +809,10 @@ class TransformerTrainer(BaseRLTrainer):
         ):
             current_episodes = self.envs.current_episodes()
             with torch.no_grad(): 
-                obs = default_collate(batch_list)
+                obs = default_collate(self.gt_observations[:idxxx+1][-30:])
+                obs = {k: obs[k].unsqueeze(1).to(self.device) for k in obs.keys()}
+                if idxxx > 0:
+                    obs = default_collate(batch_list)
                 actions = self.transformer_policy.act(
                     {k: obs[k].transpose(1,0) for k in obs.keys()},
                     prev_actions=prev_actions[:,-len(batch_list):,:],

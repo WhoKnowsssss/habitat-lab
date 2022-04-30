@@ -150,7 +150,10 @@ def producer(
 ):
     while True:
         if len(deque) < 1:
+            import time
+            s = time.time_ns()//1000000
             deque.append(read_dataset(config, verbose, rng))
+            print("dataset loaded, ", time.time_ns()//1000000 - s)
             time.sleep(3)
         else:
             time.sleep(10)

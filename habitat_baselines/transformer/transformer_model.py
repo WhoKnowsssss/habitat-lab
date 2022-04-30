@@ -135,6 +135,9 @@ class GPT(nn.Module):
         
         self.apply(self._init_weights)
 
+        self.loss1_var = nn.parameter.Parameter(torch.zeros((1,)))
+        self.loss2_var = nn.parameter.Parameter(torch.zeros((1,)))
+        self.loss3_var = nn.parameter.Parameter(torch.zeros((1,)))
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
@@ -288,15 +291,25 @@ class GPT(nn.Module):
 
         # if we are given some desired targets also calculate the loss
         loss = None
+        loss_dict = None
+        # a = (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1))
+        # print(a[0])
+        # logits_loc = torch.argmax(logits_loc,dim=-1)
+        # print(logits_loc[0])
         if targets is not None:
             loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
             loss2 = F.mse_loss(logits_arm, targets[:,:,:8])
-            loss = loss1 + loss2
-            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item()}
+            loss3 = F.binary_cross_entropy(logits_stop, targets[:,:,-1:])
+            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "stop": loss3.detach().item()}
+            loss1 = torch.exp(-self.loss1_var) * loss1 + self.loss1_var
+            loss2 = torch.exp(-self.loss2_var) * loss2 + self.loss2_var
+            loss3 = torch.exp(-self.loss3_var) * loss3 + self.loss3_var
+            loss = loss1 + loss2 # + loss3
             # loss = F.cross_entropy(logits_pick.permute(0,2,1), 3 * (targets[:,:,7] > 0) + (targets[:,:,7] < 0) + 2 * (targets[:,:,7] == 0) - 1)
             # loss += F.binary_cross_entropy_with_logits(logits_pick, F.sigmoid(targets[:,:,7]).unsqueeze(-1))
 
         logits_loc = torch.argmax(logits_loc,dim=-1)
+        
         logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)
         logits[:,:,:8] = logits_arm
         # logits[:,:,7:8] = logits_pick
@@ -305,5 +318,5 @@ class GPT(nn.Module):
         logits[:,:,8] = logits_loc == 1
         logits[:,:,9] = logits_loc - 1
         logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
-        logits[:,:,-1:] = torch.round(logits_stop)
+        logits[:,:,-1:] = 0 #torch.round(logits_stop)
         return logits, loss, loss_dict

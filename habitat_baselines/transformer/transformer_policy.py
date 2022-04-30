@@ -374,11 +374,11 @@ class TransformerResnetNet(Net):
             else:
                 visual_feats = self.visual_encoder_depth(observations)
 
-            visual_feats = self.visual_fc_depth(visual_feats)
-            x.append(visual_feats)
-            visual_feats = self.visual_encoder(observations)
-            visual_feats = self.visual_fc(visual_feats)
-            x.append(visual_feats)
+                visual_feats = self.visual_fc_depth(visual_feats)
+                x.append(visual_feats)
+                visual_feats = self.visual_encoder(observations)
+                visual_feats = self.visual_fc(visual_feats)
+                x.append(visual_feats)
 
         if self._fuse_keys is not None:
             fuse_states = torch.cat(
