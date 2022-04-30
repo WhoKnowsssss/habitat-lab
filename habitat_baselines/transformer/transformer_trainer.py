@@ -469,7 +469,6 @@ class TransformerTrainer(BaseRLTrainer):
             buffer_index=buffer_index,
         )
 
-
     @rank0_only
     def _training_log(
         self, writer, losses: Dict[str, float], prev_time: int = 0

@@ -154,6 +154,6 @@ def producer(
             s = time.time_ns()//1000000
             deque.append(read_dataset(config, verbose, rng))
             print("dataset loaded, ", time.time_ns()//1000000 - s)
-            time.sleep(3)
+            time.sleep(1)
         else:
-            time.sleep(10)
+            time.sleep(1)
