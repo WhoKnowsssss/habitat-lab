@@ -14,7 +14,7 @@ from habitat.tasks.rearrange.rearrange_sensors import (
     RearrangeReward,
     RobotForce,
 )
-from habitat.tasks.rearrange.utils import logger
+from habitat.tasks.rearrange.utils import rearrange_logger
 
 
 @registry.register_measure
@@ -70,7 +70,7 @@ class RearrangePickReward(RearrangeReward):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
@@ -79,7 +79,7 @@ class RearrangePickReward(RearrangeReward):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
         reward = self._metric
         ee_to_object_distance = task.measurements.measures[
@@ -110,7 +110,9 @@ class RearrangePickReward(RearrangeReward):
                 # picked the wrong object
                 reward -= self._config.WRONG_PICK_PEN
                 if self._config.WRONG_PICK_SHOULD_END:
-                    logger.info("Grasped wrong object, ending episode.")
+                    rearrange_logger.debug(
+                        "Grasped wrong object, ending episode."
+                    )
                     self._task.should_end = True
                 self._metric = reward
                 self._prev_picked = cur_picked
@@ -172,7 +174,7 @@ class RearrangePickSuccess(Measure):
             episode=episode,
             task=task,
             observations=observations,
-            **kwargs
+            **kwargs,
         )
 
     def update_metric(self, *args, episode, task, observations, **kwargs):
@@ -188,7 +190,7 @@ class RearrangePickSuccess(Measure):
         self._metric = (
             abs_targ_obj_idx == self._sim.grasp_mgr.snap_idx
             and not self._sim.grasp_mgr.is_violating_hold_constraint()
-            and ee_to_rest_distance < self._config.SUCC_THRESH
+            and ee_to_rest_distance < self._config.EE_RESTING_SUCCESS_THRESHOLD
         )
 
         self._prev_ee_pos = observations["ee_pos"]

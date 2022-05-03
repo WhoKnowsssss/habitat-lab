@@ -62,9 +62,13 @@ _C.FORCE_TORCH_SINGLE_THREADED = False
 # Weights and Biases config
 # -----------------------------------------------------------------------------
 _C.WB = CN()
+# The name of the project on W&B.
 _C.WB.PROJECT_NAME = ""
+# Logging entity (like your username or team name)
 _C.WB.ENTITY = ""
+# The group ID to assign to the run. Optional to specify.
 _C.WB.GROUP = ""
+# The run name to assign to the run. If not specified, W&B will randomly assign a name.
 _C.WB.RUN_NAME = ""
 # -----------------------------------------------------------------------------
 # EVAL CONFIG
@@ -80,6 +84,7 @@ _C.EVAL.SHOULD_LOAD_CKPT = True
 _C.RL = CN()
 _C.RL.REWARD_MEASURE = "distance_to_goal"
 _C.RL.SUCCESS_MEASURE = "spl"
+_C.RL.END_ON_SUCCESS = False
 _C.RL.SUCCESS_REWARD = 2.5
 _C.RL.SLACK_REWARD = -0.01
 # -----------------------------------------------------------------------------
@@ -103,6 +108,7 @@ _C.RL.POLICY.name = "PointNavResNetPolicy"
 _C.RL.POLICY.action_distribution_type = "categorical"  # or 'gaussian'
 # If the list is empty, all keys will be included.
 _C.RL.POLICY.include_visual_keys = []
+_C.RL.GYM_OBS_KEYS = []
 # For gaussian action distribution:
 _C.RL.POLICY.ACTION_DIST = CN()
 _C.RL.POLICY.ACTION_DIST.use_log_std = True

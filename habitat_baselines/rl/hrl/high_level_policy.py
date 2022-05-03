@@ -4,7 +4,7 @@ import torch
 import yaml
 
 from habitat.tasks.rearrange.multi_task.rearrange_pddl import parse_func
-from habitat_baselines.common.logging import logger
+from habitat_baselines.common.logging import baselines_logger
 
 
 class HighLevelPolicy:
@@ -21,6 +21,9 @@ class GtHighLevelPolicy:
         self._solution_actions = [
             parse_func(sol_step) for sol_step in task_spec["solution"]
         ]
+        # Add a wait action at the end.
+        self._solution_actions.append(parse_func("wait(30)"))
+
         self._next_sol_idxs = torch.zeros(num_envs, dtype=torch.int32)
         self._num_envs = num_envs
         self._skill_name_to_idx = skill_name_to_idx
@@ -39,7 +42,7 @@ class GtHighLevelPolicy:
                 if self._next_sol_idxs[batch_idx] >= len(
                     self._solution_actions
                 ):
-                    logger.info(
+                    baselines_logger.info(
                         f"Calling for immediate end with {self._next_sol_idxs[batch_idx]}"
                     )
                     immediate_end[batch_idx] = 1.0
@@ -48,7 +51,7 @@ class GtHighLevelPolicy:
                     use_idx = self._next_sol_idxs[batch_idx].item()
 
                 skill_name, skill_args = self._solution_actions[use_idx]
-                logger.info(
+                baselines_logger.info(
                     f"Got next element of the plan with {skill_name}, {skill_args}"
                 )
                 if skill_name not in self._skill_name_to_idx:
