@@ -1,7 +1,8 @@
 VERBOSE: False
-BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
+BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick_nav_place.yaml
 TASK_CONFIG:
   TASK:
+    USING_SUBTASKS: True
     SENSORS:
       - TARGET_START_SENSOR
       - GOAL_SENSOR
@@ -11,6 +12,7 @@ TASK_CONFIG:
       - END_EFFECTOR_SENSOR
       - RELATIVE_RESTING_POS_SENSOR
       - TARGET_START_POINT_GOAL_SENSOR
+      - TARGET_GOAL_GPS_COMPASS_SENSOR
       - NAV_TO_SKILL_SENSOR
       - MARKER_REL_POS_SENSOR
       - ART_JOINT_SENSOR
@@ -20,7 +22,34 @@ TASK_CONFIG:
       - ABS_TARGET_START_SENSOR
       - LOCALIZATION_SENSOR
       - NAV_GOAL_SENSOR
-      - TARGET_START_POINT_GOAL_SENSOR
+    MEASUREMENTS:
+      - OBJECT_TO_GOAL_DISTANCE
+      - ROBOT_FORCE
+      - FORCE_TERMINATE
+      - ROBOT_COLLS
+      - END_EFFECTOR_TO_REST_DISTANCE
+      - END_EFFECTOR_TO_OBJECT_DISTANCE
+      - OBJ_AT_GOAL
+      - ROT_DIST_TO_GOAL
+      - DIST_TO_GOAL
+      - BAD_CALLED_TERMINATE
+      - NAV_TO_POS_SUCC
+      - REARRANGE_NAV_TO_OBJ_SUCCESS
+      - REARRANGE_NAV_TO_OBJ_REWARD
+      - PICK_SUCCESS
+      - PICK_REWARD
+      - PLACE_SUCCESS
+      - PLACE_REWARD
+      - COMPOSITE_NODE_IDX
+      - COMPOSITE_SUCCESS
+      - COMPOSITE_REWARD
+      - NUM_STEPS
+      - DID_VIOLATE_HOLD_CONSTRAINT
+      - EE_DIST_TO_MARKER
+      - ART_OBJ_AT_DESIRED_STATE
+      - ART_OBJ_STATE
+      - ART_OBJ_SUCCESS
+      - ART_OBJ_REWARD
 TRAINER_NAME: "ddppo"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
@@ -147,12 +176,18 @@ RL:
           skill_name: "WaitSkillPolicy"
           MAX_SKILL_STEPS: -1.0
 
+        RESET_ARM_SKILL:
+          skill_name: "ResetArmSkill"
+          MAX_SKILL_STEPS: -1.0
+          RESET_JOINT_STATE: [-4.5003259e-01, -1.0799699e00, 9.9526465e-02, 9.3869519e-01, -7.8854430e-04, 1.5702540e00, 4.6168058e-03]
+
       USE_SKILLS:
         pick: "NN_PICK"
         place: "NN_PLACE"
         nav: "GT_NAV"
         nav_to_receptacle: "GT_NAV"
         wait: "WAIT_SKILL"
+        reset_arm: "RESET_ARM_SKILL"
 
   REWARD_MEASURE: "composite_reward"
   SUCCESS_MEASURE: "composite_success"
