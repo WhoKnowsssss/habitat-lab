@@ -1,5 +1,5 @@
 VERBOSE: False
-BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
+BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick_nav_place.yaml
 TRAINER_NAME: "transformer" #online_transformer
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
@@ -11,12 +11,12 @@ VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
-NUM_ENVIRONMENTS: 4
+EVAL_CKPT_PATH_DIR: "data/new_checkpoints/npnp"
+NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
 SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
-CHECKPOINT_FOLDER: "data/new_checkpoints"
+CHECKPOINT_FOLDER: "data/new_checkpoints/npnp"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
 LOG_INTERVAL: 1
@@ -34,11 +34,11 @@ RL:
       include_visual_keys: ["robot_head_depth", "robot_head_rgb"] # "robot_head_depth", robot_head_rgb
       
 
-  REWARD_MEASURE: "composite_reward"
+  REWARD_MEASURE: "move_obj_reward"
   SUCCESS_MEASURE: "composite_success"
   SUCCESS_REWARD: 100.0
   SLACK_REWARD: -0.01
-  GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position', 'object_to_agent_gps_compass'] # , 'abs_obj_start_sensor'
+  GYM_OBS_KEYS: ['obj_start_sensor', 'obj_goal_sensor', 'joint', 'is_holding', 'relative_resting_position', 'object_to_agent_gps_compass'] # , 'abs_obj_start_sensor'
 
   TRAJECTORY_DATASET:
     trajectory_dir: "data/temp_data_new"
@@ -64,7 +64,7 @@ RL:
     
     num_mini_batch: 2
     context_length: 30
-    max_episode_step: 1000
+    max_episode_step: 500
     model_type: "reward_conditioned"
     n_head: 8
     n_layer: 6
@@ -73,7 +73,7 @@ RL:
 
     use_normalized_advantage: False
 
-    hidden_size: 512
+    hidden_size: 480
 
     # Use double buffered sampling, typically helps
     # when environment time is similar or large than

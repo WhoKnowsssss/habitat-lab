@@ -717,6 +717,7 @@ class TransformerTrainer(BaseRLTrainer):
                 for k, v in ckpt_dict["state_dict"].items()
                 if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
+            , strict=True
         )
 
         observations = self.envs.reset()
@@ -810,7 +811,7 @@ class TransformerTrainer(BaseRLTrainer):
             with torch.no_grad(): 
                 obs = default_collate(self.gt_observations[:idxxx+1][-30:])
                 obs = {k: obs[k].unsqueeze(1).to(self.device) for k in obs.keys()}
-                if idxxx > 0:
+                if idxxx > 0 and idxxx < 260:
                     obs = default_collate(batch_list)
                 actions = self.transformer_policy.act(
                     {k: obs[k].transpose(1,0) for k in obs.keys()},
@@ -1088,8 +1089,10 @@ class TransformerTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
+                    more_infos = dict(object_to_agent_gps_compass=observations[i]['object_to_agent_gps_compass'].tolist()[0])
+                    more_infos.update(infos[i])
                     if self.config.VIDEO_RENDER_ALL_INFO:
-                        frame = overlay_frame(frame, infos[i])
+                        frame = overlay_frame(frame, more_infos) # infos[i]
                     rgb_frames[i].append(frame)
 
             not_done_masks = not_done_masks.to(device=self.device)

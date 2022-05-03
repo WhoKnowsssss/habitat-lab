@@ -365,7 +365,7 @@ class TransformerResnetNet(Net):
         
         x = []
         B = prev_actions.shape[0]
-        if observations[list(observations.keys())[0]].shape[0] == B:
+        if len(observations['joint'].shape) == len(prev_actions.shape):
             observations = {k: observations[k].reshape(-1, *observations[k].shape[2:]) for k in observations.keys()}
 
         if not self.is_blind:
