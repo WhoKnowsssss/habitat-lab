@@ -1,9 +1,9 @@
 ENVIRONMENT:
-    MAX_EPISODE_STEPS: 4000
+    MAX_EPISODE_STEPS: 4500
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
-    DATA_PATH: data/datasets/replica_cad/rearrange/v1/{split}/prepare_groceries_10k_1k.json.gz
+    DATA_PATH: data/datasets/replica_cad/rearrange/v1/{split}/set_table_10k_1k.json.gz
     SCENES_DIR: data/replica_cad/
 TASK:
     TYPE: RearrangeCompositeTask-v0
@@ -19,7 +19,7 @@ TASK:
     BASE_NOISE: 0.05
     EASY_INIT: false
     TASK_SPEC_BASE_PATH: configs/tasks/rearrange/pddl/
-    TASK_SPEC: prepare_groceries
+    TASK_SPEC: set_table
     PDDL_DOMAIN_DEF: configs/tasks/rearrange/pddl/replica_cad_domain.yaml
     OBJ_SUCC_THRESH: 0.3
     ART_SUCC_THRESH: 0.15
@@ -118,20 +118,6 @@ TASK:
         TYPE: TargetStartGpsCompassSensor
     TARGET_GOAL_GPS_COMPASS_SENSOR:
         TYPE: TargetGoalGpsCompassSensor
-    NAV_TO_POS_SUCC:
-        SUCCESS_DISTANCE: 0.2
-        TYPE: NavToPosSucc
-    PLACE_SUCCESS:
-        EE_RESTING_SUCCESS_THRESHOLD: 0.3
-        TYPE: PlaceSuccess
-    PICK_SUCCESS:
-        EE_RESTING_SUCCESS_THRESHOLD: 0.3
-        TYPE: RearrangePickSuccess
-    REARRANGE_NAV_TO_OBJ_SUCCESS:
-        TYPE: NavToObjSuccess
-        SUCCESS_ANGLE_DIST: 0.7
-        MUST_LOOK_AT_TARG: true
-        HEURISTIC_STOP: false
 SIMULATOR:
     ACTION_SPACE_CONFIG: v0
     GRASP_IMPULSE: 1000.0
