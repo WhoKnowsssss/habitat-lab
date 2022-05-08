@@ -80,7 +80,6 @@ target/
 data
 wandb
 video_dir
-video_dir_2
 tb
 
 # Mac OS-specific storage files
@@ -91,3 +90,5 @@ tb
 
 # vim
 *.swp
+
+wandb/

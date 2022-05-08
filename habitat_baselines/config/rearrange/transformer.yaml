@@ -1,5 +1,5 @@
 VERBOSE: False
-BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
+BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick_nav_place.yaml
 TRAINER_NAME: "transformer"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
@@ -11,7 +11,7 @@ VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/ckpts/nav_pick_nav_place"
+EVAL_CKPT_PATH_DIR: "data/ckpts/nav_pick_nav_place_3"
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
@@ -34,14 +34,14 @@ RL:
       include_visual_keys: ["robot_head_depth", "robot_head_rgb"] # "robot_head_depth", robot_head_rgb
       
 
-  REWARD_MEASURE: "composite_reward"
+  REWARD_MEASURE: "move_obj_reward"
   SUCCESS_MEASURE: "composite_success"
   SUCCESS_REWARD: 100.0
   SLACK_REWARD: -0.01
   GYM_OBS_KEYS: ['obj_start_sensor', 'obj_goal_sensor', 'joint', 'is_holding', 'relative_resting_position', 'object_to_agent_gps_compass'] # , 'abs_obj_start_sensor'
 
   TRAJECTORY_DATASET:
-    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_04_24_rgb/"
+    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_05_03_rgb/"
     files_per_load: 1
     steps_to_reload: 5000
     trajs_per_file: 10
@@ -71,7 +71,7 @@ RL:
 
     use_normalized_advantage: False
 
-    hidden_size: 512
+    hidden_size: 480
 
     # Use double buffered sampling, typically helps
     # when environment time is similar or large than

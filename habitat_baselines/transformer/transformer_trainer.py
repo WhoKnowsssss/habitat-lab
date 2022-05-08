@@ -166,7 +166,7 @@ class TransformerTrainer(BaseRLTrainer):
             )
 
         if self.config.RL.TRANSFORMER.pretrained:
-            prefix = ""
+            prefix = "module."
             self.transformer_policy.load_state_dict(
                 {
                     k[k.find(prefix) + len(prefix) :]: v
@@ -469,7 +469,6 @@ class TransformerTrainer(BaseRLTrainer):
             buffer_index=buffer_index,
         )
 
-
     @rank0_only
     def _training_log(
         self, writer, losses: Dict[str, float], prev_time: int = 0
@@ -614,13 +613,13 @@ class TransformerTrainer(BaseRLTrainer):
                     return
 
                 self.train_dataset.set_epoch(self.num_updates_done)
+
+                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
+                    lr_scheduler.step()  # type: ignore
       
                 loss = self._run_epoch('train', epoch_num=self.num_updates_done)
 
                 self.num_updates_done += 1
-
-                if self.config.RL.TRANSFORMER.use_linear_lr_decay:
-                    lr_scheduler.step()  # type: ignore
 
                 self._training_log(writer, loss, prev_time)
 
@@ -718,6 +717,7 @@ class TransformerTrainer(BaseRLTrainer):
                 for k, v in ckpt_dict["state_dict"].items()
                 if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
+            , strict=True
         )
 
         observations = self.envs.reset()
@@ -809,7 +809,10 @@ class TransformerTrainer(BaseRLTrainer):
         ):
             current_episodes = self.envs.current_episodes()
             with torch.no_grad(): 
-                obs = default_collate(batch_list)
+                obs = default_collate(self.gt_observations[:idxxx+1][-30:])
+                obs = {k: obs[k].unsqueeze(1).to(self.device) for k in obs.keys()}
+                if idxxx > 0 and idxxx < 260:
+                    obs = default_collate(batch_list)
                 actions = self.transformer_policy.act(
                     {k: obs[k].transpose(1,0) for k in obs.keys()},
                     prev_actions=prev_actions[:,-len(batch_list):,:],
@@ -1086,8 +1089,10 @@ class TransformerTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
+                    more_infos = dict(object_to_agent_gps_compass=observations[i]['object_to_agent_gps_compass'].tolist()[0])
+                    more_infos.update(infos[i])
                     if self.config.VIDEO_RENDER_ALL_INFO:
-                        frame = overlay_frame(frame, infos[i])
+                        frame = overlay_frame(frame, more_infos) # infos[i]
                     rgb_frames[i].append(frame)
 
             not_done_masks = not_done_masks.to(device=self.device)
