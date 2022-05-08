@@ -99,6 +99,14 @@ class NetPolicy(nn.Module, Policy):
     def num_recurrent_layers(self) -> int:
         return self.net.num_recurrent_layers
 
+    @property
+    def should_load_agent_state(self):
+        return True
+
+    @property
+    def num_recurrent_layers(self) -> int:
+        return self.net.num_recurrent_layers
+
     def forward(self, *x):
         raise NotImplementedError
 

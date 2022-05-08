@@ -13,7 +13,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.13.6
+#       jupytext_version: 1.13.8
 #   kernelspec:
 #     display_name: Python 3
 #     name: python3
@@ -34,9 +34,6 @@ import os
 if "COLAB_GPU" in os.environ:
     print("Setting up Habitat")
     # !curl -L https://raw.githubusercontent.com/facebookresearch/habitat-sim/main/examples/colab_utils/colab_install.sh | NIGHTLY=true bash -s
-    # Setup to use the hab_suite branch of Habitat Lab.
-    # ! cd /content/habitat-lab && git remote set-branches origin 'hab_suite' && git fetch -v && git checkout hab_suite && cd /content/habitat-lab && python setup.py develop --all && pip install . && cd -
-
 # %%
 import os
 
