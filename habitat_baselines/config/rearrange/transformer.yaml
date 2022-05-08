@@ -1,22 +1,22 @@
 VERBOSE: False
 BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
-TRAINER_NAME: "transformer" #online_transformer
+TRAINER_NAME: "transformer"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
 VIDEO_OPTION: ["disk"]
 TENSORBOARD_DIR: "tb"
-VIDEO_DIR: "video_dir/nav_pick_gps_compass_multi"
+VIDEO_DIR: "video_dir/nav_pick_gps_compass_multi3"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
-NUM_ENVIRONMENTS: 4
+EVAL_CKPT_PATH_DIR: "data/ckpts/nav_pick_nav_place"
+NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
 SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
-CHECKPOINT_FOLDER: "data/new_checkpoints"
+CHECKPOINT_FOLDER: "data/ckpts/nav_pick_nav_place_test"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
 LOG_INTERVAL: 1
@@ -38,33 +38,31 @@ RL:
   SUCCESS_MEASURE: "composite_success"
   SUCCESS_REWARD: 100.0
   SLACK_REWARD: -0.01
-  GYM_OBS_KEYS: ['obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position', 'object_to_agent_gps_compass'] # , 'abs_obj_start_sensor'
+  GYM_OBS_KEYS: ['obj_start_sensor', 'obj_goal_sensor', 'joint', 'is_holding', 'relative_resting_position', 'object_to_agent_gps_compass'] # , 'abs_obj_start_sensor'
 
   TRAJECTORY_DATASET:
-    trajectory_dir: "data/temp_data_new"
+    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_04_24_rgb/"
     files_per_load: 1
     steps_to_reload: 5000
     trajs_per_file: 10
 
-  ROLLOUT_STORAGE:
-    num_trajs: 4
-    use_double_buffered_sampler: False
-
 
   TRANSFORMER:
-    lr: 1.0E-4
+    lr: 4.0E-4
     eps: 1.0E-5
     grad_norm_clip: 0.5
     use_linear_lr_decay: True
-    batch_size: 32 # 160
-    num_workers: 1
+    batch_size: 450 # 160
+    num_workers: 6
 
 
-    return_to_go: 130
+
+
+    return_to_go: 150
     
     num_mini_batch: 2
     context_length: 30
-    max_episode_step: 1000
+    max_episode_step: 500
     model_type: "reward_conditioned"
     n_head: 8
     n_layer: 6
@@ -102,3 +100,4 @@ WB:
   ENTITY: "haytham-huang"
   RUN_NAME: "nav_pick_gps_compass"
   GROUP: "nav_pick"
+
