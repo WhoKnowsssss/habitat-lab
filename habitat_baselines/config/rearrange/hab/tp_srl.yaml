@@ -2,6 +2,10 @@ VERBOSE: False
 BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
 TASK_CONFIG:
   TASK:
+    REWARD_MEASURE: "composite_reward"
+    SUCCESS_MEASURE: "composite_success"
+    SUCCESS_REWARD: 100.0
+    SLACK_REWARD: -0.01
     USING_SUBTASKS: True
     SENSORS:
       - TARGET_START_SENSOR
@@ -14,6 +18,9 @@ TASK_CONFIG:
       - NAV_TO_SKILL_SENSOR
       - MARKER_REL_POS_SENSOR
       - ART_JOINT_SENSOR
+      # Needed to replace the TARGET_START_POINT_GOAL_SENSOR
+      - TARGET_START_GPS_COMPASS_SENSOR
+      - TARGET_GOAL_GPS_COMPASS_SENSOR
     MEASUREMENTS:
       - OBJECT_TO_GOAL_DISTANCE
       - ROBOT_FORCE
@@ -151,7 +158,8 @@ RL:
           skill_name: "NavSkillPolicy"
           name: "PointNavResNetPolicy"
           action_distribution_type: "gaussian"
-          OBS_SKILL_INPUTS: []
+          OBS_SKILL_INPUTS: ["object_to_agent_gps_compass"]
+          OBS_SKILL_INPUT_DIM: 2
           LIN_SPEED_STOP: 0.067
           ANG_SPEED_STOP: 0.067
           LOAD_CKPT_FILE: "data/models/nav.pth"
@@ -180,10 +188,7 @@ RL:
         nav_to_receptacle: "NN_NAV"
         reset_arm: "RESET_ARM_SKILL"
 
-  REWARD_MEASURE: "composite_reward"
-  SUCCESS_MEASURE: "composite_success"
-  SUCCESS_REWARD: 100.0
-  SLACK_REWARD: -0.01
+
 
   PPO:
     # ppo params

@@ -59,7 +59,9 @@ class RearrangeStopAction(SimulatorTaskAction):
     def step(self, task, *args, is_last_action, **kwargs):
         should_stop = kwargs.get("REARRANGE_STOP", [1.0])
         if should_stop[0] == 1.0:
-            rearrange_logger.debug("Requesting episode stop.")
+            rearrange_logger.debug(
+                "Rearrange stop action requesting episode stop."
+            )
             self.does_want_terminate = True
 
         if is_last_action:
@@ -236,7 +238,9 @@ class BaseVelAction(SimulatorTaskAction):
         self.base_vel_ctrl.controlling_ang_vel = True
         self.base_vel_ctrl.ang_vel_is_local = True
 
-        self.end_on_stop = self._config.END_ON_STOP
+    @property
+    def end_on_stop(self):
+        return self._config.END_ON_STOP
 
     @property
     def action_space(self):
@@ -312,11 +316,12 @@ class BaseVelAction(SimulatorTaskAction):
             lin_vel = np.maximum(lin_vel, 0)
 
         if (
-            self.end_on_stop
-            and abs(lin_vel) < self._config.MIN_ABS_LIN_SPEED
+            abs(lin_vel) < self._config.MIN_ABS_LIN_SPEED
             and abs(ang_vel) < self._config.MIN_ABS_ANG_SPEED
         ):
             self.does_want_terminate = True
+        else:
+            self.does_want_terminate = False
 
         self.base_vel_ctrl.linear_velocity = mn.Vector3(lin_vel, 0, 0)
         self.base_vel_ctrl.angular_velocity = mn.Vector3(0, ang_vel, 0)
