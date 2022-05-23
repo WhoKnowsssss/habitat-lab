@@ -401,6 +401,8 @@ class NnSkillPolicy(SkillPolicy):
                 {  # type: ignore
                     k[len("actor_critic.") :]: v
                     for k, v in ckpt_dict["state_dict"].items()
+                    # Hack to skip random key in Erik's code
+                    if "alpha" not in k
                 }
             )
 

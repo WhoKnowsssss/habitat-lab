@@ -48,6 +48,9 @@ from habitat_baselines.rl.ddppo.ddp_utils import (
     requeue_job,
     save_resume_state,
 )
+from habitat_baselines.rl.ddppo.erik_policy import (  # noqa: F401.
+    ErikPointNavResNetPolicy,
+)
 from habitat_baselines.rl.ddppo.policy import (  # noqa: F401.
     PointNavResNetPolicy,
 )
@@ -1217,6 +1220,7 @@ class PPOTrainer(BaseRLTrainer):
             ) = self._pause_envs(
                 envs_to_pause,
                 self.envs,
+                self.actor_critic,
                 test_recurrent_hidden_states,
                 not_done_masks,
                 current_episode_reward,
