@@ -231,9 +231,9 @@ class TransformerTrainer(BaseRLTrainer):
             self.config.TORCH_GPU_ID = local_rank
             self.config.SIMULATOR_GPU_ID = local_rank
             # Multiply by the number of simulators to make sure they also get unique seeds
-            # self.config.TASK_CONFIG.SEED += (
-            #     world_rank * self.config.NUM_ENVIRONMENTS
-            # )
+            self.config.TASK_CONFIG.SEED += (
+                world_rank * self.config.RL.TRANSFORMER.num_workers
+            )
             self.config.freeze()
 
             random.seed(self.config.TASK_CONFIG.SEED)
@@ -280,7 +280,7 @@ class TransformerTrainer(BaseRLTrainer):
             torch.distributed.barrier()
 
         # self.train_dataset = StateActionReturnDataset.from_config(self.config.RL.TRAJECTORY_DATASET, self.config.RL.TRANSFORMER.context_length*3)
-        mp.set_sharing_strategy('file_system')
+        # mp.set_sharing_strategy('file_system')
         manager = mp.Manager()
         self.dataset_context = manager.dict()
         self.train_dataset = RollingDataset(self.config.RL.TRAJECTORY_DATASET, 
@@ -539,7 +539,7 @@ class TransformerTrainer(BaseRLTrainer):
         lr_scheduler = GradualWarmupScheduler(
             self.optimizer, 
             multiplier=1, 
-            total_epoch=50, 
+            total_epoch=200,  #100
             after_scheduler=lr_scheduler_after
         )
 
@@ -802,6 +802,7 @@ class TransformerTrainer(BaseRLTrainer):
         idxxx=0
         idx22=0
         success_rates = {'overall': 0, 'nav_fail': 0, 'pick_fail': 0}
+        temp_list = []
 
         while (
             len(stats_episodes) < number_of_eval_episodes
@@ -811,9 +812,9 @@ class TransformerTrainer(BaseRLTrainer):
             with torch.no_grad(): 
                 obs = default_collate(self.gt_observations[:idxxx+1][-30:])
                 obs = {k: obs[k].unsqueeze(1).to(self.device) for k in obs.keys()}
-                if idxxx > 0 and idxxx < 260:
+                if idxxx > -1:
                     obs = default_collate(batch_list)
-                actions = self.transformer_policy.act(
+                logits_loc, logits_arm, logits_pick = self.transformer_policy.act(
                     {k: obs[k].transpose(1,0) for k in obs.keys()},
                     prev_actions=prev_actions[:,-len(batch_list):,:],
                     targets=None, 
@@ -821,6 +822,37 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps=timesteps,
                     valid_context=valid_context,
                 )
+            self.gt_actions[idxxx] = torch.clamp(self.gt_actions[idxxx], -1, 1)
+            logits = torch.zeros((1, 11),device=logits_loc.device)
+            logits[:,:7] = logits_arm[:,:7]
+            logits_picka = torch.argmax(logits_pick,dim=-1)
+            logits[:,7] = logits_picka - 1
+            logits[:,7:8][logits[:,7:8]==0] = -1
+            # logits[:,8] = logits_loc == 1
+            # logits[:,9] = logits_loc - 1
+            # logits[:,9:-1][logits[:,9:-1]==2] = 0
+            # logits[:,:8] = 0.
+            logits[:,8:10] = logits_loc
+            actions = logits
+            if idxxx < 1000:
+                actions = self.gt_actions[idxxx].unsqueeze(0).cuda()
+                if actions.shape[-1] == 12:
+                    actions = torch.cat([actions[:,:10], actions[:,11:]], dim=-1)
+
+            # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.1, 0.1, 0.5, 0.9, 1.1]).cuda()
+            # temp__ = torch.bucketize(actions[:,[8,9]], boundaries)
+            # boundaries_mean = torch.tensor([-1.0, -0.7, -0.3, 0., 0.3, 0.7, 1.0]).cuda()
+            # print(actions[:,[8,9]])
+            # actions[:,[8,9]] = boundaries_mean[temp__ - 1]
+            # print("new", actions[:,[8,9]])
+            
+            # import torch.nn.functional as F
+            # loss1 = F.cross_entropy(logits_loc, (actions[:,9].long() + 1 + 2*torch.all(actions[:,8:-1].detach()==0,dim=-1)), label_smoothing=0.05)
+            # loss2 = F.mse_loss(logits_arm[:,:7], actions[:,:7])
+            # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,7]), (actions[:,7] >= 0).to(torch.float32))
+
+            # temp_list.append([loss1.item(), loss2.item(),loss3.item()])
+            temp_list.append([0,0,0])
 
             prev_actions = torch.cat((prev_actions[:,1:,:], actions.unsqueeze(1)), dim=1)  # type: ignore
             # NB: Move actions to CPU.  If CUDA tensors are
@@ -840,17 +872,16 @@ class TransformerTrainer(BaseRLTrainer):
 
             if self.split == 'eval' and current_episodes[0].episode_id == self.gt_infos[idxxx]["episode"]:  
                 total__["obs"].append(torch.sum(torch.abs(self.gt_observations[idxxx]["robot_head_rgb"] - observations[0]["robot_head_rgb"])/255).numpy())
-                total__["actions"].append((self.gt_actions[idxxx][8].numpy(), actions[0][8].cpu().numpy(), self.gt_actions[idxxx][9].numpy(), actions[0][9].cpu().numpy()))
+                total__["actions"].append((self.gt_actions[idxxx].numpy(), actions[0].cpu().numpy()))
                 total__["step"].append(idx22)     
                 idx22 += 1
 
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
-
-            # print(observations[0]['object_to_agent_gps_compass'])
-            # print(observations[0]['obj_start_sensor'])
+            
             print(idxxx)
+            # print(observations[0]['is_holding'], self.gt_observations[idxxx+1]['is_holding'])
             
             if torch.all(actions[0][8:10] == 0):
                 total__["pick_reward"] += rewards_l[0]
@@ -861,13 +892,13 @@ class TransformerTrainer(BaseRLTrainer):
                 gt_dist=torch.sqrt(torch.sum(torch.square(self.gt_observations[idxxx+1]["obj_start_sensor"]))).numpy()
                 total__["gt_dist"].append(gt_dist)
 
-                gt_dist=self.gt_observations[idxxx+1]["object_to_agent_gps_compass"].numpy()
+                gt_dist=self.gt_observations[idxxx+1]["obj_start_gps_compass"].numpy()
                 total__["gt_base_dist"].append(gt_dist)
                 idxxx += 1 
 
             pol_dist = np.sqrt(np.sum(np.square(observations[0]['obj_start_sensor'])))
             total__["dist"].append(pol_dist)
-            pol_dist=observations[0]['object_to_agent_gps_compass']
+            pol_dist=observations[0]['obj_start_gps_compass']
             total__["base_dist"].append(pol_dist)
 
 
@@ -929,6 +960,12 @@ class TransformerTrainer(BaseRLTrainer):
                     timesteps[i,0,0] = 0
                     rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
 
+                    temp_list = np.array(temp_list)
+                    print("Average Loss: ", np.average(temp_list, axis=0))
+                    print("MAX Loss: ", np.max(temp_list, axis=0))
+                    temp_list = []
+
+
                     if self.split == 'eval':
                         gt_ = np.array([total__["gt_dist"][i] for i in range(len(total__["gt_dist"]))])
                         policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
@@ -946,17 +983,12 @@ class TransformerTrainer(BaseRLTrainer):
 
                         gt_ = np.array([total__["actions"][i][0].tolist() for i in range(len(total__["gt_dist"]))])
                         policy = np.array([total__["actions"][i][1].tolist() for i in range(len(total__["gt_dist"]))])
-                        plt.figure()
-                        plt.plot(total__["step"], gt_, 'ro', alpha=0.5)
-                        plt.plot(total__["step"], policy, 'b+', alpha=0.5)
-                        wandb.log({"episode_Action_Forward": plt}, step=len(stats_episodes))
-
-                        gt_ = np.array([total__["actions"][i][2].tolist() for i in range(len(total__["gt_dist"]))])
-                        policy = np.array([total__["actions"][i][3].tolist() for i in range(len(total__["gt_dist"]))])
-                        plt.figure()
-                        plt.plot(total__["step"], gt_, 'ro', alpha=0.5)
-                        plt.plot(total__["step"], policy, 'b+', alpha=0.5)
-                        wandb.log({"episode_Action_Turn": plt}, step=len(stats_episodes))
+                        for j in range(gt_.shape[-1]-1):
+                            plt.figure()
+                            plt.plot(total__["step"], gt_[:,j], 'ro', alpha=0.5, label='Action_{}_gt'.format(j))
+                            plt.plot(total__["step"], policy[:,j], 'b+', alpha=0.5, label='Action_{}_policy'.format(j))
+                            plt.legend()
+                            wandb.log({"episode_Action_{}".format(j): plt}, step=len(stats_episodes))
 
                         gt_ = np.array([total__["rewards"][i][0] for i in range(len(total__["gt_dist"]))]).reshape(-1)
                         policy = np.array([total__["rewards"][i][1] for i in range(len(total__["gt_dist"]))])
@@ -964,7 +996,8 @@ class TransformerTrainer(BaseRLTrainer):
                         policy = np.array([np.sum(policy[:i+1]) for i in range(len(policy))])
                         plt.figure()
                         plt.plot(total__["step"], gt_, 'r')
-                        plt.plot(total__["step"], policy, 'b')
+                        plt.plot(total__["step"], policy, 'b', label='reward')
+                        plt.legend()
                         wandb.log({"episode_Reward": plt}, step=len(stats_episodes))
                         if len(gt_) and gt_[-1] > 100:
                             writer.add_scalars(
@@ -1089,7 +1122,17 @@ class TransformerTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
-                    more_infos = dict(object_to_agent_gps_compass=observations[i]['object_to_agent_gps_compass'].tolist()[0])
+                    more_infos = dict(obj_start_gps_compass=observations[i]['obj_start_gps_compass'].tolist()[0], 
+                        obj_start_gps_compass_angle=observations[i]['obj_start_gps_compass'].tolist()[1], 
+                        obj_goal_gps_compass=observations[i]['obj_goal_gps_compass'].tolist()[0],
+                        obj_goal_gps_compass_angle=observations[i]['obj_goal_gps_compass'].tolist()[1],
+                        pick_action0=logits_pick[i,0].item(),
+                        pick_action1=logits_pick[i,1].item(),
+                        pick_action2=logits_pick[i,2].item(),
+                        obj_goal_sensor=np.linalg.norm(observations[i]['obj_goal_sensor']),
+                        reward=current_episode_reward[i].item()
+                        )
+
                     more_infos.update(infos[i])
                     if self.config.VIDEO_RENDER_ALL_INFO:
                         frame = overlay_frame(frame, more_infos) # infos[i]

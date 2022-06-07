@@ -109,7 +109,7 @@ class GPT(nn.Module):
 
         self.model_type = config.model_type
 
-        self.num_inputs = 4
+        self.num_inputs = 3
 
         config.block_size = config.block_size * self.num_inputs
         
@@ -128,7 +128,7 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         # self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.head = nn.Linear(config.n_embd, 4, bias=False)
+        self.head = nn.Linear(config.n_embd, 2, bias=False)
         self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
         self.head_3 = nn.Linear(config.n_embd, 3, bias=False)
         self.head_4 = nn.Linear(config.n_embd, 1, bias=False)
@@ -233,6 +233,8 @@ class GPT(nn.Module):
         if actions is not None and self.model_type == 'reward_conditioned': 
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
             actions = actions.type(torch.float32)
+            if actions.shape[-1] == 12:
+                actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
             token_embeddings = torch.zeros((states.shape[0], self.num_inputs * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
@@ -241,8 +243,8 @@ class GPT(nn.Module):
 
             # for i in range(len(state_inputs)):
             #     token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
-            token_embeddings[:,1::self.num_inputs,:] = state_inputs[0]
-            token_embeddings[:,2::self.num_inputs,:] = torch.cat(state_inputs[1:], dim=-1)
+            # token_embeddings[:,1::self.num_inputs,:] = state_inputs[0]
+            token_embeddings[:,1::self.num_inputs,:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
             
             token_embeddings[:,(self.num_inputs-1)::self.num_inputs,:] = action_embeddings
         
@@ -267,8 +269,8 @@ class GPT(nn.Module):
         batch_size = states.shape[0]
         all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
 
-        a = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1))
-        position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
+        # position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
+        position_embeddings = self.pos_emb[:, :token_embeddings.shape[1], :]
 
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
@@ -279,7 +281,7 @@ class GPT(nn.Module):
             logits_arm = self.head_2(x[:, (self.num_inputs-2)::self.num_inputs, :])
             logits_pick = self.head_3(x[:, (self.num_inputs-2)::self.num_inputs, :])
             logits_stop = self.head_4(x[:, (self.num_inputs-2)::self.num_inputs, :])
-            logits_stop = F.sigmoid(logits_stop)
+            logits_stop = torch.sigmoid(logits_stop)
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -297,26 +299,31 @@ class GPT(nn.Module):
         # logits_loc = torch.argmax(logits_loc,dim=-1)
         # print(logits_loc[0])
         if targets is not None:
-            loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.1)
-            loss2 = F.mse_loss(logits_arm, targets[:,:,:8])
-            loss3 = F.binary_cross_entropy(logits_stop, targets[:,:,-1:])
-            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "stop": loss3.detach().item()}
+            # loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.05)
+            # loss1 = F.mse_loss(logits_loc, targets[:,:,[8,9]])
+            boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.1, 0.1, 0.5, 0.9, 1.1]).cuda()
+            temp__ = torch.bucketize(targets[:,[8,9]], boundaries) - 1
+
+            loss2 = F.mse_loss(torch.tanh(logits_arm[:,:,:7]), targets[:,:,:7])
+            # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,:,7]), (1-0.2) * (targets[:,:,7] >= 0).to(torch.float32) + 0.2 * 0.5)
+            loss3 = F.cross_entropy(logits_pick.permute(0,2,1), torch.round(targets[:,:,7]).long() + 1, label_smoothing=0.1)
+            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "pick": loss3.detach().item()}
             loss1 = torch.exp(-self.loss1_var) * loss1 + self.loss1_var
             loss2 = torch.exp(-self.loss2_var) * loss2 + self.loss2_var
             loss3 = torch.exp(-self.loss3_var) * loss3 + self.loss3_var
-            loss = loss1 + loss2 # + loss3
+            loss = loss1 + loss2 + loss3
             # loss = F.cross_entropy(logits_pick.permute(0,2,1), 3 * (targets[:,:,7] > 0) + (targets[:,:,7] < 0) + 2 * (targets[:,:,7] == 0) - 1)
             # loss += F.binary_cross_entropy_with_logits(logits_pick, F.sigmoid(targets[:,:,7]).unsqueeze(-1))
 
-        logits_loc = torch.argmax(logits_loc,dim=-1)
+        # logits_loc = torch.argmax(logits_loc,dim=-1)
         
-        logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)
-        logits[:,:,:8] = logits_arm
-        # logits[:,:,7:8] = logits_pick
-        # logits[:,:,7] = torch.argmax(logits_pick, dim=-1) - 1
-        logits[:,:,7] = logits[:,:,7]
-        logits[:,:,8] = logits_loc == 1
-        logits[:,:,9] = logits_loc - 1
-        logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
-        logits[:,:,-1:] = 0 #torch.round(logits_stop)
-        return logits, loss, loss_dict
+        # logits = torch.zeros((*logits_loc.shape[:2], 11),device=logits_loc.device)
+        # logits[:,:,:7] = torch.tanh(logits_arm[:,:,:7])
+        # logits[:,:,7] = 2 * torch.sigmoid(logits_arm[:,:,7]) - 1
+        # # logits[:,:,7:8] = logits_pick
+        # # logits[:,:,7] = torch.argmax(logits_pick, dim=-1) - 1
+        # logits[:,:,8] = logits_loc == 1
+        # logits[:,:,9] = logits_loc - 1
+        # logits[:,:,9:-1][logits[:,:,9:-1]==2] = 0
+        # logits[:,:,-1:] = 0 
+        return (logits_loc, logits_arm, logits_pick), loss, loss_dict

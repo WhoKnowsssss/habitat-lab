@@ -795,7 +795,14 @@ class PddlSetState:
 
         # Set the robot starting position
         if self.robo_state.pos == "rnd":
-            sim.set_robot_base_to_random_point()
+            import torch
+            init_pos = torch.load('/srv/share/xhuang394/share_demos/nav_pick_04_24_rgb.startpos')
+            try:
+                pos = init_pos[sim.ep_info["episode_id"]].numpy()
+            except:
+                print('Not Found')
+                pos = None
+            sim.set_robot_base_to_random_point(pos)
 
 
 class ArtSampler:

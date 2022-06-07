@@ -27,6 +27,7 @@ def read_dataset(
     path = config.trajectory_dir
 
     filenames = os.listdir(path)
+    filenames = ['{}.pt'.format(i*10) for i in range(1,2)]
 
     if verbose:
         logger.info(
@@ -58,7 +59,10 @@ def read_dataset(
             temp_actions = torch.stack(dataset_raw["actions"]).numpy()
             temp_stepwise_returns = torch.cat(dataset_raw["rewards"]).numpy()
             temp_dones = torch.cat(dataset_raw["masks"]).numpy()
+            temp_infos = np.array([v["success"] for v in dataset_raw["infos"]])
 
+            
+            #==================== Only Arm Action Phase ===================
             # stepwise_idx = np.argwhere(np.all(temp_actions[:,8:10] == 0, axis=-1) & temp_dones == True).squeeze()
 
             # temp_obs = np.delete(temp_obs, stepwise_idx, 0)
@@ -66,36 +70,49 @@ def read_dataset(
             # temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
             # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
-            temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
+            
+            #==================== Only Successful Episodes ===================
+            # stepwise_idx = np.argwhere(temp_infos == False).squeeze()
 
-            idx = np.nonzero(temp_done_idxs[1:] - temp_done_idxs[:-1] < 30)[0]
+            # temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+            # temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+            # temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+            # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+            
+            temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
+            if len(temp_done_idxs) == 0:
+                print("EVEN NO SUCCESS IN THIS FILE!!!!!!")
+                continue
+            
+            #==================== Only Episodes that are larger than 30 ===================
+            temp_start_idxs = np.roll(temp_done_idxs, -1)
+            temp_start_idxs[0] = 0
+
+            idx = np.nonzero(temp_done_idxs[:] - temp_start_idxs[:] < 30)[0]
             if len(idx) > 0:
 
-                stepwise_idx = np.concatenate([np.arange(temp_done_idxs[:-1][i] , temp_done_idxs[1:][i]) for i in idx])
+                stepwise_idx = np.concatenate([np.arange(temp_start_idxs[i] , temp_done_idxs[i]) for i in idx])
 
                 temp_obs = np.delete(temp_obs, stepwise_idx, 0)
                 temp_actions = np.delete(temp_actions, stepwise_idx, 0)
                 temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
                 temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
-                
+            temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
 
-            temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
-
-            # idx = np.nonzero(temp_stepwise_returns[temp_done_idxs-1] < 90)[0]
-            # if len(idx) > 0:
-            #     stepwise_idx = np.concatenate([np.arange(temp_done_idxs[i-1] if i > 0 else 0, temp_done_idxs[i]) for i in idx])
-
-            #     temp_obs = np.delete(temp_obs, stepwise_idx, 0)
-            #     temp_actions = np.delete(temp_actions, stepwise_idx, 0)
-            #     temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
-            #     temp_dones = np.delete(temp_dones, stepwise_idx, 0)
-
-            # temp_done_idxs = np.argwhere(temp_dones == False).squeeze() + 1
-
+            
+            #==================== Categorize Gripper Action ===================
+            temp_actions = np.clip(temp_actions, -1, 1)
+            temp_pick_action = temp_actions[:,7]
+            temp_pick_action = np.nonzero((temp_pick_action[1:] - temp_pick_action[:-1]) < -0.1)[0] + 1
+            temp_place_idx = np.searchsorted(temp_pick_action, temp_done_idxs, side='right') - 1
+            temp_pick_action = temp_pick_action[temp_place_idx].reshape(-1)
+            stepwise_idx = np.concatenate([np.arange(temp_pick_action[i] , temp_done_idxs[i]) for i in range(temp_pick_action.shape[0])])
+            temp_actions[stepwise_idx, 7] = 0
+            
             l = temp_done_idxs[1:] - temp_done_idxs[:-1]
             # debug
-            assert all(l <= 500), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
+            assert all(l <= 1000), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
             # assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
             # print(f"file:  {file}  dn:  {temp_done_idxs}")
 

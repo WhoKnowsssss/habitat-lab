@@ -289,7 +289,7 @@ class RearrangeSim(HabitatSim):
             }
 
     def set_robot_base_to_random_point(
-        self, max_attempts: int = 50
+        self, pos=None, max_attempts: int = 50
     ) -> Tuple[np.ndarray, float]:
         """
         :returns: The set base position and rotation
@@ -300,6 +300,13 @@ class RearrangeSim(HabitatSim):
             start_pos = self.safe_snap_point(start_pos)
             start_rot = np.random.uniform(0, 2 * np.pi)
 
+            if pos is not None: 
+                start_pos = pos[:3]
+                start_rot = pos[3]
+                # start_pos = np.array([-0.2841,  0.1523,  2.4074]) 
+                # start_rot = 1.1645
+                # pass
+            
             self.robot.base_pos = start_pos
             self.robot.base_rot = start_rot
             self.perform_discrete_collision_detection()

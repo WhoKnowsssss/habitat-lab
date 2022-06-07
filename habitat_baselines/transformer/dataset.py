@@ -120,10 +120,10 @@ class RollingDataset(IterableDataset):
             self.dataset = StateActionReturnDataset.from_config(self.queue.popleft(), self.context_length)
             self.dataset_context['num_init'] += 1
 
-            if self._is_distributed:
-                self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=(self.seed + self.seed_epoch), drop_last=True)
-            else:
-                self.sampler = RandomSampler(self.dataset) # RandomSampler
+            # if self._is_distributed:
+            #     self.sampler = DistributedSampler(self.dataset, num_replicas=self.num_replicas, rank=self.rank, seed=(self.seed + self.seed_epoch), drop_last=True)
+            # else:
+            self.sampler = RandomSampler(self.dataset) # RandomSampler
 
         def __iter__(self):
             self.num_iterated_epoch = 0
@@ -133,7 +133,7 @@ class RollingDataset(IterableDataset):
             self.num_workers = worker_info.num_workers - 1 if worker_info is not None else 0
             self.id = worker_info.id if worker_info is not None else 0
 
-            rng = np.random.default_rng(self.seed)
+            rng = np.random.default_rng(self.seed + self.id)
             if self.producer is None:
                 self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False)) # config, np.RNG, queue, verbose
                 self.producer.start()
@@ -145,8 +145,8 @@ class RollingDataset(IterableDataset):
             # print(f"rank: {self.rank}, {self.dataset_context['need_init_{}'.format(self.id)]}, {len(self.queue)}")
 
             # if self.dataset_context['need_init_{}'.format(self.id)]:
-            if self.temp_times % 2 == 0:
-                self.init_dataset()
+            # if self.temp_times % 2 == 0:
+            self.init_dataset()
             self.temp_times += 1
                 # self.dataset_context['need_init_{}'.format(self.id)] = False
 
