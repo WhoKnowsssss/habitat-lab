@@ -19,11 +19,13 @@ from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 
 from habitat import Config, VectorEnv, logger
+from habitat.core.environments import get_env_class
 from habitat.utils import profiling_wrapper
+from habitat.utils.env_utils import construct_envs
+from habitat.utils.render_wrapper import overlay_frame
 from habitat.utils.visualizations.utils import observations_to_image
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
-from habitat_baselines.common.environments import get_env_class
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
     apply_obs_transforms_obs_space,
@@ -46,6 +48,9 @@ from habitat_baselines.rl.ddppo.ddp_utils import (
     requeue_job,
     save_resume_state,
 )
+from habitat_baselines.rl.ddppo.erik_policy import (  # noqa: F401.
+    ErikPointNavResNetPolicy,
+)
 from habitat_baselines.rl.ddppo.policy import (  # noqa: F401.
     PointNavResNetPolicy,
 )
@@ -62,8 +67,6 @@ from habitat_baselines.utils.common import (
     get_num_actions,
     is_continuous_action_space,
 )
-from habitat_baselines.utils.env_utils import construct_envs
-from habitat_baselines.utils.render_wrapper import overlay_frame
 
 
 @baseline_registry.register_trainer(name="ddppo")
@@ -1011,6 +1014,48 @@ class PPOTrainer(BaseRLTrainer):
 
         pbar = tqdm.tqdm(total=number_of_eval_episodes)
         self.actor_critic.eval()
+
+        os.makedirs(self.config.DATASET_SAVE_PATH, exist_ok=True)
+
+        def flush_episodes():
+            save_path = os.path.join(
+                self.config.DATASET_SAVE_PATH, f"{saved_num_episodes}.pt"
+            )
+            torch.save(
+                {
+                    "obs": all_obs,
+                    "rewards": all_rewards,
+                    "masks": all_masks,
+                    "actions": all_actions,
+                    "infos": all_infos,
+                },
+                save_path,
+            )
+            print(f"Flushed to {save_path}")
+
+        def get_save_obs(batch):
+            if self.config.DATASET_SAVE_VISUAL_ENCODED:
+                return self.actor_critic.net.visual_encoder(batch)
+            else:
+                return batch
+
+        all_obs = []
+        all_rewards = []
+        all_masks = []
+        all_actions = []
+        all_infos = []
+
+        buffer_obs = defaultdict(list)
+        buffer_rewards = defaultdict(list)
+        buffer_masks = defaultdict(list)
+        buffer_actions = defaultdict(list)
+        buffer_infos = defaultdict(list)
+        saved_num_episodes = 0
+
+        visual_batch = get_save_obs(batch)
+        for i in range(self.envs.num_envs):
+            buffer_obs[i].append(visual_batch[i])
+
         while (
             len(stats_episodes) < number_of_eval_episodes
             and self.envs.num_envs > 0
@@ -1070,7 +1115,19 @@ class PPOTrainer(BaseRLTrainer):
             next_episodes = self.envs.current_episodes()
             envs_to_pause = []
             n_envs = self.envs.num_envs
+
+            visual_batch = get_save_obs(batch)
+
             for i in range(n_envs):
+                # Add the step to the buffer
+                buffer_obs[i].append(visual_batch[i])
+                buffer_rewards[i].append(rewards[i])
+                buffer_masks[i].append(not_done_masks[i])
+                buffer_actions[i].append(actions[i])
+                buffer_infos[i].append(
+                    {"episode": next_episodes[i].episode_id}
+                )
+
                 if (
                     next_episodes[i].scene_id,
                     next_episodes[i].episode_id,
@@ -1079,6 +1136,36 @@ class PPOTrainer(BaseRLTrainer):
 
                 # episode ended
                 if not not_done_masks[i].item():
+                    # Flush buffer to the final dataset
+                    all_obs.extend(
+                        [
+                            {k: v for k, v in obs.items()}
+                            for obs in buffer_obs[i]
+                        ]
+                    )
+                    all_rewards.extend(buffer_rewards[i])
+                    all_masks.extend(buffer_masks[i])
+                    all_actions.extend(buffer_actions[i])
+                    all_infos.extend(buffer_infos[i])
+                    saved_num_episodes += 1
+
+                    buffer_obs[i] = []
+                    buffer_rewards[i] = []
+                    buffer_masks[i] = []
+                    buffer_actions[i] = []
+                    buffer_infos[i] = []
+
+                    if (
+                        saved_num_episodes % self.config.DATASET_SAVE_INTERVAL
+                        == 0
+                    ):
+                        flush_episodes()
+                        all_obs = []
+                        all_rewards = []
+                        all_masks = []
+                        all_actions = []
+                        all_infos = []
+
                     pbar.update()
                     episode_stats = {
                         "reward": current_episode_reward[i].item()
@@ -1133,6 +1220,7 @@ class PPOTrainer(BaseRLTrainer):
             ) = self._pause_envs(
                 envs_to_pause,
                 self.envs,
+                self.actor_critic,
                 test_recurrent_hidden_states,
                 not_done_masks,
                 current_episode_reward,

@@ -2,6 +2,10 @@ VERBOSE: False
 BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
 TASK_CONFIG:
   TASK:
+    REWARD_MEASURE: "composite_reward"
+    SUCCESS_MEASURE: "composite_success"
+    SUCCESS_REWARD: 100.0
+    SLACK_REWARD: -0.01
     USING_SUBTASKS: True
     SENSORS:
       - TARGET_START_SENSOR
@@ -77,6 +81,12 @@ EVAL:
   SPLIT: "eval"
   USE_CKPT_CONFIG: False
   SHOULD_LOAD_CKPT: False
+
+# IL SAVE OPTIONS
+DATASET_SAVE_PATH: "/srv/share/aszot3/share_demos/nav_pick_03_09/"
+DATASET_SAVE_INTERVAL: 10
+DATASET_SAVE_ENCODER: True
+DATASET_SAVE_VISUAL_ENCODED: False
 
 RL:
   POLICY:
@@ -185,11 +195,7 @@ RL:
         wait: "WAIT_SKILL"
         reset_arm: "RESET_ARM_SKILL"
 
-  REWARD_MEASURE: "composite_reward"
-  SUCCESS_MEASURE: "composite_success"
-  SUCCESS_REWARD: 100.0
-  SLACK_REWARD: -0.01
-  GYM_OBS_KEYS: ['robot_head_depth', 'obj_start_sensor', 'joint', 'is_holding', 'relative_resting_position']
+
 
   PPO:
     # ppo params
