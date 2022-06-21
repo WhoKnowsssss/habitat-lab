@@ -539,7 +539,7 @@ class TransformerTrainer(BaseRLTrainer):
         lr_scheduler = GradualWarmupScheduler(
             self.optimizer, 
             multiplier=1, 
-            total_epoch=200,  #100
+            total_epoch=100,  #100
             after_scheduler=lr_scheduler_after
         )
 
@@ -824,20 +824,28 @@ class TransformerTrainer(BaseRLTrainer):
                 )
             self.gt_actions[idxxx] = torch.clamp(self.gt_actions[idxxx], -1, 1)
             logits = torch.zeros((1, 11),device=logits_loc.device)
-            logits[:,:7] = logits_arm[:,:7]
-            logits_picka = torch.argmax(logits_pick,dim=-1)
-            logits[:,7] = logits_picka - 1
-            logits[:,7:8][logits[:,7:8]==0] = -1
+            # logits[:,:8] = torch.tanh(logits_arm[:,:8])
+            # logits_picka = torch.argmax(logits_pick,dim=-1)
+            # logits[:,7] = logits_picka - 1
+            # logits[:,7:8][logits[:,7:8]==0] = -1
+            # logits[:,[8,9]] = logits_loc[:,:]
             # logits[:,8] = logits_loc == 1
             # logits[:,9] = logits_loc - 1
             # logits[:,9:-1][logits[:,9:-1]==2] = 0
             # logits[:,:8] = 0.
             logits[:,8:10] = logits_loc
+            # if torch.any(torch.abs(torch.tanh(logits[:,:7])) > 0.2):
+            #     logits[:,8:10] = 0.
+            # boundaries_mean = torch.tensor([-1.0, -0.7, -0.4, -0.2, 0., 0.2, 0.4, 0.7, 1.0]).cuda()
+            # logits[:,8] = boundaries_mean[torch.argmax(logits_loc[:,:9], dim=-1)]
+            # logits[:,9] = boundaries_mean[torch.argmax(logits_loc[:,9:], dim=-1)]
             actions = logits
-            if idxxx < 1000:
+            if idxxx < -1:
                 actions = self.gt_actions[idxxx].unsqueeze(0).cuda()
                 if actions.shape[-1] == 12:
                     actions = torch.cat([actions[:,:10], actions[:,11:]], dim=-1)
+                actions[:,8][torch.abs(actions[:,8]) < 0.5] = 0.
+                actions[:,9][torch.abs(actions[:,9]) < 0.5] = 0.
 
             # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.1, 0.1, 0.5, 0.9, 1.1]).cuda()
             # temp__ = torch.bucketize(actions[:,[8,9]], boundaries)
@@ -847,7 +855,12 @@ class TransformerTrainer(BaseRLTrainer):
             # print("new", actions[:,[8,9]])
             
             # import torch.nn.functional as F
-            # loss1 = F.cross_entropy(logits_loc, (actions[:,9].long() + 1 + 2*torch.all(actions[:,8:-1].detach()==0,dim=-1)), label_smoothing=0.05)
+            # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.1, 0.1, 0.5, 0.9, 1.1]).cuda()
+            # temp_target = torch.bucketize(actions[:,[8,9]], boundaries) - 1
+            # print(temp_target, torch.argmax(logits[:,:7], dim=-1), torch.argmax(logits[:,7:], dim=-1))
+
+            # loss1 = F.cross_entropy(logits_loc[:,:7], temp_target[:,0]) + F.cross_entropy(logits_loc[:,7:], temp_target[:,1])
+            # print(logits_loc[:,:7], temp_target[:,0], F.cross_entropy(logits_loc[:,:7].cpu(), temp_target[:,0].cpu()))
             # loss2 = F.mse_loss(logits_arm[:,:7], actions[:,:7])
             # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,7]), (actions[:,7] >= 0).to(torch.float32))
 
@@ -881,7 +894,6 @@ class TransformerTrainer(BaseRLTrainer):
             ]
             
             print(idxxx)
-            # print(observations[0]['is_holding'], self.gt_observations[idxxx+1]['is_holding'])
             
             if torch.all(actions[0][8:10] == 0):
                 total__["pick_reward"] += rewards_l[0]
@@ -1126,7 +1138,8 @@ class TransformerTrainer(BaseRLTrainer):
                         obj_start_gps_compass_angle=observations[i]['obj_start_gps_compass'].tolist()[1], 
                         obj_goal_gps_compass=observations[i]['obj_goal_gps_compass'].tolist()[0],
                         obj_goal_gps_compass_angle=observations[i]['obj_goal_gps_compass'].tolist()[1],
-                        pick_action0=logits_pick[i,0].item(),
+                        # pick_action0=logits_pick[i,0].item(),
+                        pick_action=logits_arm[i,-1].item(),
                         pick_action1=logits_pick[i,1].item(),
                         pick_action2=logits_pick[i,2].item(),
                         obj_goal_sensor=np.linalg.norm(observations[i]['obj_goal_sensor']),

@@ -334,14 +334,14 @@ class TransformerResnetNet(Net):
             self.visual_fc_depth = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(
-                    np.prod(self.visual_encoder.output_shape), hidden_size
+                    np.prod(self.visual_encoder.output_shape), hidden_size//2
                 ),
                 nn.ReLU(True),
             )
             self.visual_fc = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(
-                    np.prod(self.visual_encoder.output_shape), hidden_size//2
+                    np.prod(self.visual_encoder.output_shape), hidden_size
                 ),
                 nn.ReLU(True),
             )
@@ -378,7 +378,9 @@ class TransformerResnetNet(Net):
             if "visual_features" in observations:
                 visual_feats = observations["visual_features"]
             else:
-                
+                # visual_feats = self.visual_encoder_depth(observations)
+                # visual_feats = self.visual_fc_depth(visual_feats)
+                # x.append(visual_feats)
                 visual_feats = self.visual_encoder(observations)
                 visual_feats = self.visual_fc(visual_feats)
                 x.append(visual_feats)
@@ -387,8 +389,13 @@ class TransformerResnetNet(Net):
                 x.append(visual_feats)
 
         if self._fuse_keys is not None:
-            observations['obj_start_gps_compass'] = torch.stack([observations['obj_start_gps_compass'][:,0], torch.cos(observations['obj_start_gps_compass'][:,1]), torch.sin(observations['obj_start_gps_compass'][:,1])]).permute(1,0)
-            observations['obj_goal_gps_compass'] = torch.stack([observations['obj_goal_gps_compass'][:,0], torch.cos(observations['obj_goal_gps_compass'][:,1]), torch.sin(observations['obj_goal_gps_compass'][:,1])]).permute(1,0)
+            observations['obj_start_gps_compass'] = torch.stack([observations['obj_start_gps_compass'][:,0], torch.cos(-observations['obj_start_gps_compass'][:,1]), torch.sin(-observations['obj_start_gps_compass'][:,1])]).permute(1,0)
+            observations['obj_goal_gps_compass'] = torch.stack([observations['obj_goal_gps_compass'][:,0], torch.cos(-observations['obj_goal_gps_compass'][:,1]), torch.sin(-observations['obj_goal_gps_compass'][:,1])]).permute(1,0)
+            # observations['obj_start_gps_compass'] = torch.stack([observations['obj_start_gps_compass'][:,0], torch.cos(observations['obj_start_gps_compass'][:,1]), torch.sin(observations['obj_start_gps_compass'][:,1])]).permute(1,0)
+            # observations['obj_goal_gps_compass'] = torch.stack([observations['obj_goal_gps_compass'][:,0], torch.cos(observations['obj_goal_gps_compass'][:,1]), torch.sin(observations['obj_goal_gps_compass'][:,1])]).permute(1,0)
+            # observations['obj_start_gps_compass'][:,1] *= -1
+            # observations['obj_goal_gps_compass'][:,1] *= -1
+            
             fuse_states = torch.cat(
                 [observations[k] for k in self._fuse_keys], dim=-1
             )

@@ -127,17 +127,18 @@ class GPT(nn.Module):
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
-        # self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.head = nn.Linear(config.n_embd, 2, bias=False)
+        # self.head = nn.Linear(config.n_embd, 18, bias=False)
         self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
         self.head_3 = nn.Linear(config.n_embd, 3, bias=False)
         self.head_4 = nn.Linear(config.n_embd, 1, bias=False)
         
         self.apply(self._init_weights)
 
-        self.loss1_var = nn.parameter.Parameter(torch.zeros((1,)))
-        self.loss2_var = nn.parameter.Parameter(torch.zeros((1,)))
-        self.loss3_var = nn.parameter.Parameter(torch.zeros((1,)))
+        self.loss_vars = nn.parameter.Parameter(torch.zeros((3,)))
+        # self.loss1_var = nn.parameter.Parameter(torch.zeros((1,)))
+        # self.loss2_var = nn.parameter.Parameter(torch.zeros((1,)))
+        # self.loss3_var = nn.parameter.Parameter(torch.zeros((1,)))
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
@@ -281,7 +282,6 @@ class GPT(nn.Module):
             logits_arm = self.head_2(x[:, (self.num_inputs-2)::self.num_inputs, :])
             logits_pick = self.head_3(x[:, (self.num_inputs-2)::self.num_inputs, :])
             logits_stop = self.head_4(x[:, (self.num_inputs-2)::self.num_inputs, :])
-            logits_stop = torch.sigmoid(logits_stop)
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
@@ -300,17 +300,30 @@ class GPT(nn.Module):
         # print(logits_loc[0])
         if targets is not None:
             # loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.05)
-            # loss1 = F.mse_loss(logits_loc, targets[:,:,[8,9]])
-            boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.1, 0.1, 0.5, 0.9, 1.1]).cuda()
-            temp__ = torch.bucketize(targets[:,[8,9]], boundaries) - 1
+            
+            # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
+            # temp_target = torch.bucketize(targets[:,:,[8,9]], boundaries) - 1
+            # loss1 = F.cross_entropy(logits_loc[:,:,:9].permute(0,2,1), temp_target[:,:,0], label_smoothing=0.05) + F.cross_entropy(logits_loc[:,:,9:].permute(0,2,1), temp_target[:,:,1], label_smoothing=0.05)
+            
+            loss1 = F.mse_loss(logits_loc, targets[:,:,[8,9]], reduction='none')
+            loss2 = F.mse_loss(torch.tanh(logits_arm[:,:,:8]), targets[:,:,:8], reduction='none')
+            # mask1 = torch.all(targets[:,:,[8,9]] == 0, dim=-1)
+            # mask2 = torch.all(targets[:,:,:7] == 0, dim=-1)
+            # loss1[~mask2] = 0.
+            # loss2[~mask1] = 0.
+            loss1 = torch.mean(loss1)
+            loss2 = torch.mean(loss2)
 
-            loss2 = F.mse_loss(torch.tanh(logits_arm[:,:,:7]), targets[:,:,:7])
+            # temp_target = mask1 + 2 * mask2 - 1
+            # loss4 = F.cross_entropy(logits_stop.permute(0,2,1), temp_target.long(), label_smoothing=0.05)
+
             # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,:,7]), (1-0.2) * (targets[:,:,7] >= 0).to(torch.float32) + 0.2 * 0.5)
             loss3 = F.cross_entropy(logits_pick.permute(0,2,1), torch.round(targets[:,:,7]).long() + 1, label_smoothing=0.1)
-            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "pick": loss3.detach().item()}
-            loss1 = torch.exp(-self.loss1_var) * loss1 + self.loss1_var
-            loss2 = torch.exp(-self.loss2_var) * loss2 + self.loss2_var
-            loss3 = torch.exp(-self.loss3_var) * loss3 + self.loss3_var
+            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "pick": loss3.detach().item()} #, "phase": loss4.detach().item()
+            loss1 = torch.exp(-self.loss_vars[0]) * loss1 + self.loss_vars[0]
+            loss2 = torch.exp(-self.loss_vars[1]) * loss2 + self.loss_vars[1]
+            loss3 = torch.exp(-self.loss_vars[2]) * loss3 + self.loss_vars[2]
+            # loss4 = torch.exp(-self.loss_vars[3]) * loss4 + self.loss_vars[3]
             loss = loss1 + loss2 + loss3
             # loss = F.cross_entropy(logits_pick.permute(0,2,1), 3 * (targets[:,:,7] > 0) + (targets[:,:,7] < 0) + 2 * (targets[:,:,7] == 0) - 1)
             # loss += F.binary_cross_entropy_with_logits(logits_pick, F.sigmoid(targets[:,:,7]).unsqueeze(-1))

@@ -27,7 +27,7 @@ def read_dataset(
     path = config.trajectory_dir
 
     filenames = os.listdir(path)
-    filenames = ['{}.pt'.format(i*10) for i in range(1,2)]
+    # filenames = ['{}.pt'.format(i*10) for i in range(1,2)]
 
     if verbose:
         logger.info(
@@ -109,6 +109,10 @@ def read_dataset(
             temp_pick_action = temp_pick_action[temp_place_idx].reshape(-1)
             stepwise_idx = np.concatenate([np.arange(temp_pick_action[i] , temp_done_idxs[i]) for i in range(temp_pick_action.shape[0])])
             temp_actions[stepwise_idx, 7] = 0
+
+            #===================== Filter out unnecessary jitters ====================
+            # temp_actions[:,8][np.abs(temp_actions[:,8]) < 0.3] = 0.
+            # temp_actions[:,9][np.abs(temp_actions[:,9]) < 0.3] = 0.
             
             l = temp_done_idxs[1:] - temp_done_idxs[:-1]
             # debug

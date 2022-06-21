@@ -349,7 +349,7 @@ def generate_video(
     checkpoint_idx: int,
     metrics: Dict[str, float],
     tb_writer: TensorboardWriter,
-    fps: int = 10,
+    fps: int = 30,
     verbose: bool = True,
     keys_to_include_in_name: Optional[List[str]] = None,
 ) -> None:
@@ -394,7 +394,7 @@ def generate_video(
     )
     if "disk" in video_option:
         assert video_dir is not None
-        images_to_video(images, video_dir, video_name, verbose=verbose)
+        images_to_video(images, video_dir, video_name, verbose=verbose, fps=fps)
     if "tensorboard" in video_option:
         tb_writer.add_video_from_np_images(
             f"episode{episode_id}", checkpoint_idx, images, fps=fps
