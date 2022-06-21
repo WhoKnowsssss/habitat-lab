@@ -18,7 +18,14 @@ from habitat_baselines.common.tensorboard_utils import (
     TensorboardWriter,
     get_writer,
 )
-from habitat_baselines.rl.ddppo.ddp_utils import SAVE_STATE, is_slurm_batch_job
+from habitat_baselines.rl.ddppo.ddp_utils import (
+    SAVE_STATE,
+    add_signal_handlers,
+    is_slurm_batch_job,
+    load_resume_state,
+    save_resume_state,
+)
+from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.utils.common import (
     get_checkpoint_id,
     poll_checkpoint_folder,
@@ -83,6 +90,16 @@ class BaseTrainer:
         Returns:
             None
         """
+        if is_slurm_batch_job():
+            add_signal_handlers()
+
+        resume_state = load_resume_state(self.config, filename_key="eval")
+        if resume_state is not None:
+            self.config = resume_state["config"]
+            prev_ckpt_ind = resume_state["prev_ckpt_ind"]
+        else:
+            prev_ckpt_ind = -1
+
         self.device = (
             torch.device("cuda", self.config.TORCH_GPU_ID)
             if torch.cuda.is_available()
@@ -99,7 +116,14 @@ class BaseTrainer:
                 len(self.config.VIDEO_DIR) > 0
             ), "Must specify a directory for storing videos on disk"
 
-        with get_writer(self.config, flush_secs=self.flush_secs) as writer:
+        if prev_ckpt_ind == -1:
+            purge_step = 0
+        else:
+            purge_step = None
+
+        with get_writer(
+            self.config, flush_secs=self.flush_secs, purge_step=purge_step
+        ) as writer:
             if os.path.isfile(self.config.EVAL_CKPT_PATH_DIR):
                 # evaluate singe checkpoint
                 proposed_index = get_checkpoint_id(
@@ -131,6 +155,18 @@ class BaseTrainer:
                         writer=writer,
                         checkpoint_index=prev_ckpt_ind,
                     )
+
+                    save_resume_state(
+                        {
+                            "config": self.config,
+                            "prev_ckpt_ind": prev_ckpt_ind,
+                        },
+                        self.config,
+                        filename_key="eval",
+                    )
+
+                    if (prev_ckpt_ind + 1) == self.config.NUM_CHECKPOINTS:
+                        break
 
     def _eval_checkpoint(
         self,
@@ -282,6 +318,7 @@ class BaseRLTrainer(BaseTrainer):
     def _pause_envs(
         envs_to_pause: List[int],
         envs: VectorEnv,
+        actor_critic: Policy,
         test_recurrent_hidden_states: Tensor,
         not_done_masks: Tensor,
         current_episode_reward: Tensor,
@@ -316,6 +353,7 @@ class BaseRLTrainer(BaseTrainer):
                 batch[k] = v[state_index]
 
             rgb_frames = [rgb_frames[i] for i in state_index]
+            actor_critic.do_pause(state_index)
 
         return (
             envs,
