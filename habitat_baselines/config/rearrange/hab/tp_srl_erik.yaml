@@ -11,20 +11,23 @@ TASK_CONFIG:
       - TARGET_START_SENSOR
       - GOAL_SENSOR
       - ABS_GOAL_SENSOR
+      - ABS_TARGET_START_SENSOR
       - JOINT_SENSOR
       - IS_HOLDING_SENSOR
       - END_EFFECTOR_SENSOR
       - RELATIVE_RESTING_POS_SENSOR
       - TARGET_START_POINT_GOAL_SENSOR
+      - TARGET_START_GPS_COMPASS_SENSOR
+      - TARGET_GOAL_GPS_COMPASS_SENSOR
       - NAV_TO_SKILL_SENSOR
       - MARKER_REL_POS_SENSOR
       - ART_JOINT_SENSOR
         # Sensors needed for oracle navigation.
-      - DIST_TO_NAV_GOAL
-      - ORACLE_NAV_ACTION_SENSOR
-      - ABS_TARGET_START_SENSOR
-      - LOCALIZATION_SENSOR
-      - NAV_GOAL_SENSOR
+      # - DIST_TO_NAV_GOAL
+      # - ORACLE_NAV_ACTION_SENSOR
+      # - ABS_TARGET_START_SENSOR
+      # - LOCALIZATION_SENSOR
+      # - NAV_GOAL_SENSOR
     MEASUREMENTS:
       - OBJECT_TO_GOAL_DISTANCE
       - ROBOT_FORCE
@@ -58,7 +61,7 @@ TRAINER_NAME: "ddppo"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
-VIDEO_OPTION: ["disk"]
+VIDEO_OPTION: [] #"disk"
 TENSORBOARD_DIR: "tb"
 VIDEO_DIR: "video_dir"
 VIDEO_FPS: 30
@@ -69,7 +72,7 @@ EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'tb'
 # Visual sensors to include
-SENSORS: ["HEAD_DEPTH_SENSOR"]
+SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
 CHECKPOINT_FOLDER: "data/new_checkpoints"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
@@ -162,6 +165,22 @@ RL:
           MAX_SKILL_STEPS: 200
           FORCE_END_ON_TIMEOUT: True
 
+        NN_NAV:
+          skill_name: "NavSkillPolicy"
+          name: "ErikPointNavResNetPolicy"
+          action_distribution_type: "gaussian"
+          OBS_SKILL_INPUTS: ["object_to_agent_gps_compass"]
+          OBS_SKILL_INPUT_DIM: 2
+          LIN_SPEED_STOP: 0.067
+          ANG_SPEED_STOP: 0.067
+          LOAD_CKPT_FILE: "data/models/nav_latest.pth"
+          MAX_SKILL_STEPS: 300
+          FORCE_END_ON_TIMEOUT: False
+          LIN_SPEED: 15.0
+          ANG_SPEED: 15.0
+          DELTA_POS_LIMIT: 0.025
+          NO_NAV: False
+        
         GT_NAV:
           skill_name: "OracleNavPolicy"
           OBS_SKILL_INPUTS: ["obj_start_sensor", "abs_obj_start_sensor", "obj_goal_sensor", "abs_obj_goal_sensor"]
@@ -190,8 +209,8 @@ RL:
       USE_SKILLS:
         pick: "NN_PICK"
         place: "NN_PLACE"
-        nav: "GT_NAV"
-        nav_to_receptacle: "GT_NAV"
+        nav: "NN_NAV"
+        nav_to_receptacle: "NN_NAV"
         wait: "WAIT_SKILL"
         reset_arm: "RESET_ARM_SKILL"
 

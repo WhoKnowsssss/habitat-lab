@@ -238,18 +238,23 @@ class BaseVelAction(SimulatorTaskAction):
         self.base_vel_ctrl.controlling_ang_vel = True
         self.base_vel_ctrl.ang_vel_is_local = True
 
+        self.has_stop_action = True
+
     @property
     def end_on_stop(self):
         return self._config.END_ON_STOP
 
     @property
     def action_space(self):
-        lim = 20
+        lim = 1.0
         return spaces.Dict(
             {
                 "base_vel": spaces.Box(
                     shape=(2,), low=-lim, high=lim, dtype=np.float32
-                )
+                ), 
+                "nav_stop": spaces.Box(
+                shape=(1,), low=-lim, high=lim, dtype=np.float32
+            )
             }
         )
 
@@ -308,15 +313,21 @@ class BaseVelAction(SimulatorTaskAction):
             # object.
             self._sim.grasp_mgr.update_object_to_grasp()
 
-    def step(self, base_vel, *args, is_last_action, **kwargs):
+    def step(self, base_vel, *args, is_last_action, nav_stop=None, **kwargs):
         lin_vel, ang_vel = base_vel
         lin_vel = np.clip(lin_vel, -1, 1) * self._config.LIN_SPEED
         ang_vel = np.clip(ang_vel, -1, 1) * self._config.ANG_SPEED
         if not self._config.ALLOW_BACK:
             lin_vel = np.maximum(lin_vel, 0)
 
-        if (
-            abs(lin_vel) < self._config.MIN_ABS_LIN_SPEED
+        if self.has_stop_action:
+            assert nav_stop is not None
+
+        if self.has_stop_action and (nav_stop > 0.01):
+            self.does_want_terminate = True
+        elif (
+            not self.has_stop_action
+            and abs(lin_vel) < self._config.MIN_ABS_LIN_SPEED
             and abs(ang_vel) < self._config.MIN_ABS_ANG_SPEED
         ):
             self.does_want_terminate = True

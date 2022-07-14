@@ -1125,7 +1125,7 @@ class PPOTrainer(BaseRLTrainer):
                 buffer_masks[i].append(not_done_masks[i])
                 buffer_actions[i].append(actions[i])
                 buffer_infos[i].append(
-                    {"episode": next_episodes[i].episode_id}
+                    {"episode": next_episodes[i].episode_id, "success": False}
                 )
 
                 if (
@@ -1143,6 +1143,8 @@ class PPOTrainer(BaseRLTrainer):
                             for obs in buffer_obs[i]
                         ]
                     )
+                    for idx in range(len(buffer_infos[i])):
+                        buffer_infos[i][idx]["success"] = infos[i]['composite_success']
                     all_rewards.extend(buffer_rewards[i])
                     all_masks.extend(buffer_masks[i])
                     all_actions.extend(buffer_actions[i])

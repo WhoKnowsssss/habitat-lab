@@ -1,5 +1,5 @@
 VERBOSE: False
-BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
+BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick_nav_place.yaml
 TASK_CONFIG:
   TASK:
     REWARD_MEASURE: "composite_reward"
@@ -16,6 +16,8 @@ TASK_CONFIG:
       - END_EFFECTOR_SENSOR
       - RELATIVE_RESTING_POS_SENSOR
       - TARGET_START_POINT_GOAL_SENSOR
+      - TARGET_START_GPS_COMPASS_SENSOR
+      - TARGET_GOAL_GPS_COMPASS_SENSOR
       - NAV_TO_SKILL_SENSOR
       - MARKER_REL_POS_SENSOR
       - ART_JOINT_SENSOR
@@ -58,7 +60,7 @@ TRAINER_NAME: "ddppo"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
-VIDEO_OPTION: ["disk"]
+VIDEO_OPTION: [] #"disk"
 TENSORBOARD_DIR: "tb"
 VIDEO_DIR: "video_dir"
 VIDEO_FPS: 30
@@ -69,7 +71,7 @@ EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'tb'
 # Visual sensors to include
-SENSORS: ["HEAD_DEPTH_SENSOR"]
+SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
 CHECKPOINT_FOLDER: "data/new_checkpoints"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
