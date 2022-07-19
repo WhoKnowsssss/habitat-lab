@@ -220,25 +220,12 @@ class GaussianNet(ActionDistributionNet):
         super().__init__()
 
         self.action_activation = config.action_activation
-        self.use_log_std = config.use_log_std
         self.use_softplus = config.use_softplus
         use_std_param = config.use_std_param
         self.clamp_std = config.clamp_std
-        self.scheduled_std = config.scheduled_std
-
-        if self.use_log_std:
-            self.min_std = config.min_log_std
-            self.max_std = config.max_log_std
-            std_init = 0.0  # initialize std value so that exp(std) ~ 1
-        elif self.use_softplus:
-            inv_softplus = lambda x: math.log(math.exp(x) - 1)
-            self.min_std = inv_softplus(config.min_std)
-            self.max_std = inv_softplus(config.max_std)
-            std_init = inv_softplus(1.0)
-        else:
-            self.min_std = config.min_std
-            self.max_std = config.max_std
-            std_init = 1.0  # initialize std value so that std ~ 1
+        self.min_std = config.min_log_std
+        self.max_std = config.max_log_std
+        std_init = config.log_std_init
 
         if use_std_param:
             self.std = torch.nn.parameter.Parameter(
@@ -291,9 +278,8 @@ class GaussianNet(ActionDistributionNet):
             mu = torch.tanh(mu)
 
         if self.clamp_std:
-            std = torch.clamp(std, self.min_std, self.max_std)
-        if self.use_log_std:
-            std = torch.exp(std)
+            std = torch.clamp(std, min=self.min_std, max=self.max_std)
+        std = torch.exp(std)
         if self.use_softplus:
             std = torch.nn.functional.softplus(std)
 
@@ -565,7 +551,9 @@ def generate_video(
     )
     if "disk" in video_option:
         assert video_dir is not None
-        images_to_video(images, video_dir, video_name, verbose=verbose)
+        images_to_video(
+            images, video_dir, video_name, fps=fps, verbose=verbose
+        )
     if "tensorboard" in video_option:
         tb_writer.add_video_from_np_images(
             f"episode{episode_id}", checkpoint_idx, images, fps=fps

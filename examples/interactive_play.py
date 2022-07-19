@@ -10,13 +10,10 @@ Manually control the robot to interact with the environment. Run as
 python examples/interative_play.py
 ```
 
-To Run you need PyGame installed.
+To Run you need PyGame installed (to install run `pip install pygame==2.0.1`).
 
 By default this controls with velocity control (which makes controlling the
-robot hard). To use IK control instead: run with
-```
-python examples/interactive_play.py --cfg configs/tasks/rearrangepick_replica_cad_example_ik.yaml
-```
+robot hard). To use IK control instead add the `--add-ik` command line argument.
 
 Controls:
 - For velocity control
@@ -32,8 +29,12 @@ Controls:
     - I,J,K,L,U,O to rotate the camera
     - B to reset the camera position
 
+Change the task with `--cfg configs/tasks/rearrange/close_cab.yaml` (choose any task under the `configs/tasks/rearrange/` folder).
+
 Change the grip type:
 - Suction gripper `TASK.ACTIONS.ARM_ACTION.GRIP_CONTROLLER "SuctionGraspAction"`
+
+To record a video: `--save-obs` This will save the video to file under `data/vids/` specified by `--save-obs-fname` (by default `vid.mp4`).
 
 Record and play back trajectories:
 - To record a trajectory add `--save-actions --save-actions-count 200` to
@@ -53,7 +54,8 @@ import numpy as np
 import habitat
 import habitat.tasks.rearrange.rearrange_task
 from habitat.tasks.rearrange.actions import ArmEEAction
-from habitat.tasks.rearrange.utils import euler_to_quat
+from habitat.tasks.rearrange.rearrange_sensors import GfxReplayMeasure
+from habitat.tasks.rearrange.utils import euler_to_quat, write_gfx_replay
 from habitat.utils.render_wrapper import overlay_frame
 from habitat.utils.visualizations.utils import observations_to_image
 from habitat_sim.utils import viz_utils as vut
@@ -69,21 +71,40 @@ SAVE_VIDEO_DIR = "./data/vids"
 SAVE_ACTIONS_DIR = "./data/interactive_play_replays"
 
 
-def step_env(env, action_name, action_args, args):
+def step_env(env, action_name, action_args):
     return env.step({"action": action_name, "action_args": action_args})
 
 
 def get_input_vel_ctlr(
-    skip_pygame, arm_action, g_args, prev_obs, env, not_block_input
+    skip_pygame,
+    arm_action,
+    g_args,
+    prev_obs,
+    env,
+    not_block_input,
+    agent_to_control,
 ):
     if skip_pygame:
-        return step_env(env, "EMPTY", {}, g_args), None, False
+        return step_env(env, "EMPTY", {}), None, False
 
-    if "ARM_ACTION" in env.action_space.spaces:
-        arm_action_space = env.action_space.spaces["ARM_ACTION"].spaces[
-            "arm_action"
+    multi_agent = len(env._sim.robots_mgr) > 1
+    arm_action_name = "ARM_ACTION"
+    base_action_name = "BASE_VELOCITY"
+    arm_key = "arm_action"
+    grip_key = "grip_action"
+    base_key = "base_vel"
+    if multi_agent:
+        arm_action_name = f"{agent_to_control}_{arm_action_name}"
+        base_action_name = f"{agent_to_control}_{base_action_name}"
+        arm_key = agent_to_control + "_" + arm_key
+        grip_key = agent_to_control + "_" + grip_key
+        base_key = agent_to_control + "_" + base_key
+
+    if arm_action_name in env.action_space.spaces:
+        arm_action_space = env.action_space.spaces[arm_action_name].spaces[
+            arm_key
         ]
-        arm_ctrlr = env.task.actions["ARM_ACTION"].arm_ctrlr
+        arm_ctrlr = env.task.actions[arm_action_name].arm_ctrlr
         base_action = None
     else:
         arm_action_space = np.zeros(7)
@@ -198,26 +219,26 @@ def get_input_vel_ctlr(
         print(f"Robot arm joint state: {joint_state}")
 
     args = {}
-    if base_action is not None and "BASE_VELOCITY" in env.action_space.spaces:
-        name = "BASE_VELOCITY"
-        args = {"base_vel": base_action}
+    if base_action is not None and base_action_name in env.action_space.spaces:
+        name = base_action_name
+        args = {base_key: base_action}
     else:
-        name = "ARM_ACTION"
+        name = arm_action_name
         if given_arm_action:
             # The grip is also contained in the provided action
             args = {
-                "arm_action": arm_action[:-1],
-                "grip_action": arm_action[-1],
+                arm_key: arm_action[:-1],
+                grip_key: arm_action[-1],
             }
         else:
-            args = {"arm_action": arm_action, "grip_action": magic_grasp}
+            args = {arm_key: arm_action, grip_key: magic_grasp}
 
     if magic_grasp is None:
         arm_action = [*arm_action, 0.0]
     else:
         arm_action = [*arm_action, magic_grasp]
 
-    return step_env(env, name, args, g_args), arm_action, end_ep
+    return step_env(env, name, args), arm_action, end_ep
 
 
 def get_wrapped_prop(venv, prop):
@@ -323,6 +344,7 @@ def play_env(env, args, config):
     all_obs = []
     total_reward = 0
     all_arm_actions = []
+    agent_to_control = "AGENT_0"
 
     free_cam = FreeCamHelper()
 
@@ -336,6 +358,14 @@ def play_env(env, args, config):
         if render_steps_limit is not None and update_idx > render_steps_limit:
             break
 
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_x]:  # and (update_idx - self._last_pressed) > 60:
+            if agent_to_control == "AGENT_0":
+                agent_to_control = "AGENT_1"
+            else:
+                agent_to_control = "AGENT_0"
+            print(f"Swapped to {agent_to_control}")
+
         step_result, arm_action, end_ep = get_input_vel_ctlr(
             args.no_render,
             use_arm_actions[update_idx]
@@ -345,7 +375,40 @@ def play_env(env, args, config):
             obs,
             env,
             not free_cam.is_free_cam_mode,
+            agent_to_control,
         )
+
+        if keys[pygame.K_c]:
+            pddl_action = env.task.actions["PDDL_APPLY_ACTION"]
+            print("Actions:")
+            actions = pddl_action._action_ordering
+            for i, action in enumerate(actions):
+                print(f"{i}: {action}")
+            entities = pddl_action._entities_list
+            print("Entities")
+            for i, entity in enumerate(entities):
+                print(f"{i}: {entity}")
+            action_sel = input("Enter Action Selection: ")
+            entity_sel = input("Enter Entity Selection: ")
+            action_sel = int(action_sel)
+            entity_sel = [int(x) + 1 for x in entity_sel.split(",")]
+            ac = np.zeros(pddl_action.action_space["pddl_action"].shape[0])
+            ac_start = pddl_action.get_pddl_action_start(action_sel)
+            ac[ac_start : ac_start + len(entity_sel)] = entity_sel
+
+            step_env(env, "PDDL_APPLY_ACTION", {"pddl_action": ac})
+
+        if keys[pygame.K_g]:
+            pred_list = env.task.sensor_suite.sensors[
+                "all_predicates"
+            ]._predicates_list
+            pred_values = step_result["all_predicates"]
+            print("\nPredicate Truth Values:")
+            for i, (pred, pred_value) in enumerate(
+                zip(pred_list, pred_values)
+            ):
+                print(f"{i}: {pred.compact_str} = {pred_value}")
+
         if step_result is None:
             break
 
@@ -379,7 +442,8 @@ def play_env(env, args, config):
 
         else:
             use_ob = observations_to_image(obs, info)
-            use_ob = overlay_frame(use_ob, info)
+            if not args.skip_render_text:
+                use_ob = overlay_frame(use_ob, info)
 
         draw_ob = use_ob[:]
 
@@ -427,6 +491,13 @@ def play_env(env, args, config):
             "color",
             osp.join(SAVE_VIDEO_DIR, args.save_obs_fname),
         )
+    gfx_measure = env.task.measurements.measures.get(
+        GfxReplayMeasure.cls_uuid, None
+    )
+    if gfx_measure is not None:
+        gfx_str = gfx_measure.get_metric(force_get=True)
+        write_gfx_replay(gfx_str, config.TASK, env.current_episode.episode_id)
+
     if not args.no_render:
         pygame.quit()
 
@@ -456,10 +527,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--play-cam-res", type=int, default=512)
     parser.add_argument(
-        "--play-task",
+        "--skip-render-text", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--same-task",
         action="store_true",
         default=False,
-        help="If true, then change the config settings to make it easier to play and visualize the task.",
+        help="If true, then do not add the render camera for better visualization",
+    )
+    parser.add_argument(
+        "--skip-task",
+        action="store_true",
+        default=False,
+        help="If true, then do not add the render camera for better visualization",
     )
     parser.add_argument(
         "--never-end",
@@ -472,6 +552,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="If true, changes arm control to IK",
+    )
+    parser.add_argument(
+        "--gfx",
+        action="store_true",
+        default=False,
+        help="Save a GFX replay file.",
     )
     parser.add_argument("--load-actions", type=str, default=None)
     parser.add_argument("--cfg", type=str, default=DEFAULT_CFG)
@@ -489,11 +575,16 @@ if __name__ == "__main__":
 
     config = habitat.get_config(args.cfg, args.opts)
     config.defrost()
-    if args.play_task:
+    if not args.same_task:
         config.SIMULATOR.THIRD_RGB_SENSOR.WIDTH = args.play_cam_res
         config.SIMULATOR.THIRD_RGB_SENSOR.HEIGHT = args.play_cam_res
         config.SIMULATOR.AGENT_0.SENSORS.append("THIRD_RGB_SENSOR")
         config.SIMULATOR.DEBUG_RENDER = True
+        config.TASK.COMPOSITE_SUCCESS.MUST_CALL_STOP = False
+        config.TASK.REARRANGE_NAV_TO_OBJ_SUCCESS.MUST_CALL_STOP = False
+    if args.gfx:
+        config.SIMULATOR.HABITAT_SIM_V0.ENABLE_GFX_REPLAY_SAVE = True
+        config.TASK.MEASUREMENTS.append("GFX_REPLAY_MEASURE")
     if args.never_end:
         config.ENVIRONMENT.MAX_EPISODE_STEPS = 0
     if args.add_ik:

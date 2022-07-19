@@ -107,7 +107,7 @@ importlib.reload(PIL.TiffTags)  # To potentially avoid PIL problem
 #
 # For Habitat 2.0 functionality, install the `main` branch of Habitat Lab. Complete installation steps:
 #
-# 1. Install [Habitat Sim](https://github.com/facebookresearch/habitat-sim#recommended-conda-packages) **using the `withbullet` option**. Linux example: `conda install habitat-sim withbullet headless -c conda-forge -c aihabitat-nightly`. MacOS example (does not include headless): `conda install habitat-sim withbullet headless -c conda-forge -c aihabitat-nightly`. Habitat Sim is not supported by Windows.
+# 1. Install [Habitat Sim](https://github.com/facebookresearch/habitat-sim#recommended-conda-packages) **using the `withbullet` option**. Linux example: `conda install habitat-sim withbullet headless -c conda-forge -c aihabitat-nightly`. MacOS example (does not include headless): `conda install habitat-sim withbullet -c conda-forge -c aihabitat-nightly`. Habitat Sim is not supported by Windows.
 # 2. Download the `main` branch of Habitat Lab: `git clone https://github.com/facebookresearch/habitat-lab.git`
 # 3. Install Habitat Lab: `cd habitat-lab && pip install -r requirements.txt && python setup.py develop --all`
 
@@ -174,41 +174,6 @@ video_writer.close()
 if vut.is_notebook():
     vut.display_video(video_file_path)
 
-
-# %% [markdown]
-# ## Interactive Play Script
-# On your local machine with a display connected, play the tasks using the keyboard to control the robot:
-# ```
-# python examples/interactive_play.py --play-task --never-end
-# ```
-# For more information about the interactive play script, see the
-# [documentation string at the top of the file](https://github.com/facebookresearch/habitat-lab/blob/hab_suite_baselines/examples/interactive_play.py).
-
-# %% [markdown]
-# ## Training with Habitat Baselines
-# Start training policies with PPO using [Habitat Baselines](https://github.com/facebookresearch/habitat-lab/tree/main/habitat_baselines#baselines). As an example, start training a pick policy with:
-#
-# ```
-# python -u habitat_baselines/run.py --exp-config habitat_baselines/config/rearrange/ddppo_pick.yaml --run-type train
-# ```
-# Find the [complete list of RL configurations here](https://github.com/facebookresearch/habitat-lab/tree/main/habitat_baselines/config/rearrange), any config starting with `ddppo` can be substituted.
-#
-# See [here](https://github.com/facebookresearch/habitat-lab/tree/main/habitat_baselines#baselines) for more information on how to run with Habitat Baselines.
-
-# %% [markdown]
-# ## Home Assistant Benchmark (HAB) Tasks
-#
-# To run the HAB tasks, use any of the training configurations here: [here](https://github.com/facebookresearch/habitat-lab/tree/main/main/config/rearrange/hab). For example, to run monolithic RL training on the Tidy House task run:
-# ```
-# python -u habitat_baselines/run.py --exp-config habitat_baselines/config/rearrange/hab/ddppo_tidy_house.yaml --run-type train
-# ```
-# To run the TP-SRL baseline use the [`tp_srl`](https://github.com/facebookresearch/habitat-lab/tree/main/habitat_baselines/config/rearrange/hab/tp_srl.yaml`) config. You will first need trained models for each of the individual skills placed in `data/models/[skill_name].pt`. Then specify the name of the task to run. For example, to run TP-SRL on the `set_table` task, run the following:
-# ```
-# python -u habitat_baselines/run.py --exp-config habitat_baselines/config/rearrange/hab/tp_srl.yaml --run-type train BASE_TASK_CONFIG_PATH configs/tasks/rearrange/set_table.yaml
-# ```
-# [`tp_srl_oracle_nav`](https://github.com/facebookresearch/habitat-lab/tree/main/habitat_baselines/config/rearrange/hab/tp_srl_oracle_nav.yaml) is the TP-SRL method with oracle navigation.
-#
-# The HAB tasks can also be used from the Gym interface (tutorial [here](https://github.com/facebookresearch/habitat-lab/blob/main/examples/tutorials/colabs/habitat2_gym_tutorial.ipynb)).
 
 # %% [markdown]
 # # Defining New Tasks
@@ -465,6 +430,8 @@ TASK:
         - BASE_VELOCITY
 
 SIMULATOR:
+    ADDITIONAL_OBJECT_PATHS:
+        - "data/objects/ycb/configs/"
     DEBUG_RENDER: False
     ACTION_SPACE_CONFIG: v0
     AGENTS: ['AGENT_0']
@@ -548,7 +515,7 @@ dataset_cfg_txt = """
 ---
 dataset_path: "data/replica_cad/replicaCAD.scene_dataset_config.json"
 additional_object_paths:
-  - "data/objects/ycb/"
+  - "data/objects/ycb/configs/"
 scene_sets:
   -
     name: "v3_sc"

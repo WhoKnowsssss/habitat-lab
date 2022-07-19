@@ -24,14 +24,10 @@ FORCE_TORCH_SINGLE_THREADED: True
 
 BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/reach_state.yaml
 ENV_NAME: "RearrangeRLEnv"
-EVAL:
-  SPLIT: "eval"
-
 RL:
   POLICY:
       name: "PointNavResNetPolicy"
       action_distribution_type: "gaussian"
-      include_visual_keys: []
       ACTION_DIST:
         use_log_std: True
 
@@ -78,6 +74,6 @@ RL:
     reset_critic: True
 
     # Model parameters
-    backbone: resnet50
+    backbone: resnet18
     rnn_type: LSTM
     num_recurrent_layers: 2

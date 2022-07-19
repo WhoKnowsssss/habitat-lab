@@ -285,134 +285,19 @@ def init_distrib_slurm(
     return local_rank, tcp_store
 
 
-def get_free_port() -> int:
+def find_free_port() -> int:
+    """
+    Returns a free port on the system.
+    Note that this can only be used to find a port for torch.distribted
+    if it's called by a process on the node that will have
+    world_rank == 0 and then all ranks are created. If you
+    just called `find_free_port()` on each rank independently, every
+    rank will have a different port!
+    """
     with contextlib.closing(
         socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ) as s:
-        s.bind(("localhost", 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
-
-
-def get_free_port_distributed(
-    key_name: str, tcp_store: Optional[distrib.TCPStore]
-) -> int:
-    _port_key = f"_hab_ddp_port_{key_name}"
-    if rank0_only():
-        port = get_free_port()
-        if distrib.is_initialized():
-            assert tcp_store is not None
-            tcp_store.set(_port_key, str(port))
-    else:
-        assert tcp_store is not None
-        tcp_store.wait([_port_key])
-        port = int(tcp_store.get(_port_key))
-
-    return port
-
-
-@overload
-def _maybe_all_gatherv(t: torch.Tensor) -> List[torch.Tensor]:
-    ...
-
-
-@overload
-def _maybe_all_gatherv(
-    t: torch.Tensor, output_rank: int
-) -> Optional[List[torch.Tensor]]:
-    ...
-
-
-def _maybe_all_gatherv(
-    t: torch.Tensor,
-    output_rank: Optional[int] = None,
-) -> Optional[List[torch.Tensor]]:
-    is_all = output_rank is None
-
-    world_size = distrib.get_world_size() if distrib.is_initialized() else 1
-    if world_size == 1:
-        return [t]
-
-    is_mine = is_all or distrib.get_rank() == output_rank
-
-    my_size = torch.tensor(t.numel(), dtype=torch.int64, device=t.device)
-    sizes = my_size.view(1).repeat(world_size)
-
-    distrib.all_gather(list(sizes.unbind(0)), my_size)
-    sizes = sizes.cpu()
-    max_size = sizes.max().item()
-
-    if torch.all(sizes == max_size):
-        my_msg = t.view(-1)
-    else:
-        my_msg = torch.empty((max_size,), dtype=t.dtype, device=t.device)
-        my_msg[0 : t.numel()] = t.view(-1)
-
-    if is_mine:
-        output = list(
-            torch.empty(
-                (world_size, max_size), dtype=t.dtype, device=t.device
-            ).unbind(0)
-        )
-    else:
-        output = None
-
-    if is_all:
-        distrib.all_gather(output, my_msg)
-    else:
-        distrib.gather(my_msg, output, output_rank)
-
-    if is_mine and not torch.all(sizes == max_size):
-        output = [o[0:size] for o, size in zip(output, sizes.unbind(0))]
-
-    return output
-
-
-def all_gatherv(t: torch.Tensor) -> List[torch.Tensor]:
-    return _maybe_all_gatherv(t)
-
-
-def gatherv(
-    t: torch.Tensor, output_rank: int = 0
-) -> Optional[List[torch.Tensor]]:
-    return _maybe_all_gatherv(t, output_rank=output_rank)
-
-
-@overload
-def _maybe_all_gather_objects(obj: Any, device: torch.device) -> List[Any]:
-    ...
-
-
-@overload
-def _maybe_all_gather_objects(
-    obj: Any, device: torch.device, output_rank: int
-) -> Optional[List[Any]]:
-    ...
-
-
-def _maybe_all_gather_objects(
-    obj: Any, device: torch.device, output_rank: Optional[int] = None
-) -> Optional[List[Any]]:
-    buf = io.BytesIO()
-    pickle.Pickler(buf, protocol=pickle.HIGHEST_PROTOCOL).dump(obj)
-
-    output = _maybe_all_gatherv(
-        torch.frombuffer(buf.getbuffer(), dtype=torch.uint8).to(device=device),
-        output_rank=output_rank,
-    )
-    buf = None
-
-    if output is not None:
-        output = [pickle.loads(bytes(t.cpu())) for t in output]
-
-    return output
-
-
-def all_gather_objects(obj: Any, device: torch.device) -> List[Any]:
-    return _maybe_all_gather_objects(obj, device)
-
-
-def gather_objects(
-    obj: Any, device: torch.device, output_rank: int = 0
-) -> List[Any]:
-    return _maybe_all_gather_objects(obj, device, output_rank)
+    ) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("localhost", 0))
+        _, port = sock.getsockname()
+        return port
