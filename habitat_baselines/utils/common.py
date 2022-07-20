@@ -225,7 +225,8 @@ class GaussianNet(ActionDistributionNet):
         self.clamp_std = config.clamp_std
         self.min_std = config.min_log_std
         self.max_std = config.max_log_std
-        std_init = config.log_std_init
+        std_init = 0.#config.log_std_init
+        self.scheduled_std = False
 
         if use_std_param:
             self.std = torch.nn.parameter.Parameter(

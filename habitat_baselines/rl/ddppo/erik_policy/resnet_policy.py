@@ -156,6 +156,7 @@ class ResNetEncoder(nn.Module):
             self._mode = self.backbone._mode
 
             mock_input = self._build_mock_input(observation_space)
+            
             with torch.no_grad():
                 # if self._mode == "v1":
                 #     mock_input = F.avg_pool2d(mock_input, 2)

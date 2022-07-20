@@ -81,7 +81,7 @@ class PointNavResNetPolicy(NetPolicy):
                 force_blind_policy=force_blind_policy,
                 discrete_actions=discrete_actions,
             ),
-            dim_actions=get_num_actions(action_space),
+            # dim_actions=get_num_actions(action_space),
             policy_config=policy_config,
         )
 
