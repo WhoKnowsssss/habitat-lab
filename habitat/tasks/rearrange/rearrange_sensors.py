@@ -446,14 +446,13 @@ class GfxReplayMeasure(Measure):
 
     def reset_metric(self, *args, **kwargs):
         self._gfx_replay_keyframes_string = None
-        if not self._sim.sim_config.sim_cfg.enable_gfx_replay_save:
-            raise ValueError(
-                "Must enable gfx replay save in the simulator config to use `GfxReplayMeasure`"
-            )
         self.update_metric(*args, **kwargs)
 
     def update_metric(self, *args, task, **kwargs):
-        if not task._is_episode_active:
+        if (
+            not task._is_episode_active
+            and self._sim.sim_config.sim_cfg.enable_gfx_replay_save
+        ):
             self._metric = (
                 self._sim.gfx_replay_manager.write_saved_keyframes_to_string()
             )
@@ -461,7 +460,7 @@ class GfxReplayMeasure(Measure):
             self._metric = ""
 
     def get_metric(self, force_get=False):
-        if force_get:
+        if force_get and self._sim.sim_config.sim_cfg.enable_gfx_replay_save:
             return (
                 self._sim.gfx_replay_manager.write_saved_keyframes_to_string()
             )

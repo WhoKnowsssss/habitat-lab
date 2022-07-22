@@ -225,7 +225,7 @@ class GaussianNet(ActionDistributionNet):
         self.clamp_std = config.clamp_std
         self.min_std = config.min_log_std
         self.max_std = config.max_log_std
-        std_init = 0.#config.log_std_init
+        std_init = 0.0  # config.log_std_init
         self.scheduled_std = False
 
         if use_std_param:
@@ -804,16 +804,14 @@ def iterate_action_space_recursively(action_space):
 
 
 def is_continuous_action_space(action_space) -> bool:
-    if not isinstance(action_space, spaces.Dict):
+    if isinstance(action_space, spaces.Box):
+        return True
+    elif isinstance(action_space, (spaces.Discrete, spaces.MultiDiscrete)):
         return False
-
-    for v in action_space.spaces.values():
-        if isinstance(v, spaces.Dict):
-            return is_continuous_action_space(v)
-        elif isinstance(v, spaces.Box):
-            return True
-
-    return False
+    else:
+        raise NotImplementedError(
+            f"Unknown action space {action_space}. Is neither continuous nor discrete"
+        )
 
 
 def get_num_actions(action_space) -> int:
