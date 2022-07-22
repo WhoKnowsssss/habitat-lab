@@ -1134,7 +1134,9 @@ class PPOTrainer(BaseRLTrainer):
                         ]
                     )
                     for idx in range(len(buffer_infos[i])):
-                        buffer_infos[i][idx]["success"] = infos[i]['composite_success']
+                        buffer_infos[i][idx]["success"] = infos[i][
+                            "composite_success"
+                        ]
                     all_rewards.extend(buffer_rewards[i])
                     all_masks.extend(buffer_masks[i])
                     all_actions.extend(buffer_actions[i])
