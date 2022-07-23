@@ -795,14 +795,6 @@ def action_to_velocity_control(
     return step_action
 
 
-def iterate_action_space_recursively(action_space):
-    if isinstance(action_space, spaces.Dict):
-        for v in action_space.values():
-            yield from iterate_action_space_recursively(v)
-    else:
-        yield action_space
-
-
 def is_continuous_action_space(action_space) -> bool:
     if isinstance(action_space, spaces.Box):
         return True
@@ -853,3 +845,11 @@ def get_num_distribution_parameters(action_space) -> int:
     return 2 * get_num_continuous_action_logits(
         action_space
     ) + get_num_discrete_action_logits(action_space)
+
+
+def iterate_action_space_recursively(action_space):
+    if isinstance(action_space, spaces.Dict):
+        for v in action_space.values():
+            yield from iterate_action_space_recursively(v)
+    else:
+        yield action_space

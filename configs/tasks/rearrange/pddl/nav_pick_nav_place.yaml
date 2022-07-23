@@ -27,4 +27,4 @@ solution:
   - nav(hab2|0, ROBOT_0)
   - pick(hab2|0, ROBOT_0)
   - nav(TARGET_hab2|0, ROBOT_0)
-  - place(hab2|0,TARGET_hab2|0, ROBOT_0)
+  - place(hab2|0, TARGET_hab2|0, ROBOT_0)

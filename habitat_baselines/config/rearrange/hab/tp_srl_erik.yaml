@@ -7,7 +7,7 @@ TASK_CONFIG:
     - BASE_VELOCITY
     - REARRANGE_STOP
     - ORACLE_NAV_ACTION
-    REWARD_MEASURE: "composite_reward"
+    REWARD_MEASURE: "move_obj_reward"
     SUCCESS_MEASURE: "composite_success"
     SUCCESS_REWARD: 100.0
     SLACK_REWARD: -0.01
@@ -17,11 +17,13 @@ TRAINER_NAME: "ddppo"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
-VIDEO_OPTION: [] #"disk"
+VIDEO_OPTION: ["disk"]
 TENSORBOARD_DIR: "tb"
 VIDEO_DIR: "video_dir"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
+VIDEO_RENDER_VIEWS:
+  - "THIRD_RGB_SENSOR"
 VIDEO_RENDER_ALL_INFO: True
 TEST_EPISODE_COUNT: -1
 EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
@@ -145,9 +147,10 @@ RL:
           OBS_SKILL_INPUTS: ["obj_start_sensor", "abs_obj_start_sensor", "obj_goal_sensor", "abs_obj_goal_sensor"]
           GOAL_SENSORS: ["obj_goal_sensor", "abs_obj_goal_sensor"]
           NAV_ACTION_NAME: "BASE_VELOCITY"
-          STOP_ACTION_THRESH: 0.01
           MAX_SKILL_STEPS: 300
           FORCE_END_ON_TIMEOUT: True
+          STOP_ANGLE_THRESH: 0.2
+          STOP_DIST_THRESH: 1.2
 
         WAIT_SKILL:
           skill_name: "WaitSkillPolicy"

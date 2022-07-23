@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import gym.spaces as spaces
 import numpy as np
 import torch
@@ -148,7 +150,9 @@ class NnSkillPolicy(SkillPolicy):
 
         expected_obs_keys = policy_cfg.TASK_CONFIG.GYM.OBS_KEYS
         filtered_obs_space = spaces.Dict(
-            {k: observation_space.spaces[k] for k in expected_obs_keys}
+            OrderedDict(
+                [(k, observation_space.spaces[k]) for k in expected_obs_keys]
+            )
         )
 
         for k in config.OBS_SKILL_INPUTS:
@@ -160,10 +164,12 @@ class NnSkillPolicy(SkillPolicy):
         )
 
         filtered_action_space = ActionSpace(
-            {
-                k: action_space[k]
-                for k in policy_cfg.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
-            }
+            OrderedDict(
+                [
+                    (k, action_space[k])
+                    for k in policy_cfg.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
+                ]
+            )
         )
 
         if "ARM_ACTION" in filtered_action_space.spaces and (

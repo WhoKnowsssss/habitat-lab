@@ -143,7 +143,10 @@ class PPOTrainer(BaseRLTrainer):
         )
 
         self.actor_critic = policy.from_config(
-            self.config, observation_space, self.policy_action_space
+            self.config,
+            observation_space,
+            self.policy_action_space,
+            orig_action_space=self.orig_policy_action_space,
         )
         self.obs_space = observation_space
         self.actor_critic.to(self.device)
@@ -255,6 +258,7 @@ class PPOTrainer(BaseRLTrainer):
 
         action_space = self.envs.action_spaces[0]
         self.policy_action_space = action_space
+        self.orig_policy_action_space = self.envs.orig_action_spaces[0]
         if is_continuous_action_space(action_space):
             # Assume ALL actions are NOT discrete
             action_shape = (get_num_actions(action_space),)
@@ -913,6 +917,17 @@ class PPOTrainer(BaseRLTrainer):
             config.TASK_CONFIG.TASK.MEASUREMENTS.append("COLLISIONS")
             config.freeze()
 
+        if (
+            len(config.VIDEO_RENDER_VIEWS) > 0
+            and len(self.config.VIDEO_OPTION) > 0
+        ):
+            config.defrost()
+            for render_view in config.VIDEO_RENDER_VIEWS:
+                uuid = config.TASK_CONFIG.SIMULATOR[render_view].UUID
+                config.TASK_CONFIG.GYM.OBS_KEYS.append(uuid)
+                config.SENSORS.append(render_view)
+            config.freeze()
+
         if config.VERBOSE:
             logger.info(f"env config: {config}")
 
@@ -920,6 +935,7 @@ class PPOTrainer(BaseRLTrainer):
 
         action_space = self.envs.action_spaces[0]
         self.policy_action_space = action_space
+        self.orig_policy_action_space = self.envs.orig_action_spaces[0]
         if is_continuous_action_space(action_space):
             # Assume NONE of the actions are discrete
             action_shape = (get_num_actions(action_space),)
@@ -987,7 +1003,7 @@ class PPOTrainer(BaseRLTrainer):
                 logger.warn(f"Evaluating with {total_num_eps} instead.")
                 number_of_eval_episodes = total_num_eps
         assert (
-            number_of_eval_episodes > 1
+            number_of_eval_episodes >= 1
         ), "The number TEST_EPISODE_COUNT needs to be strictly positive."
 
         pbar = tqdm.tqdm(total=number_of_eval_episodes)

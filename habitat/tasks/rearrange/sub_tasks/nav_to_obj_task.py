@@ -19,11 +19,11 @@ from habitat.tasks.rearrange.multi_task.pddl_action import PddlAction
 from habitat.tasks.rearrange.multi_task.pddl_domain import PddlProblem
 from habitat.tasks.rearrange.multi_task.rearrange_pddl import (
     OBJ_TYPE,
-    RIGID_OBJ_TYPE,
     PddlEntity,
 )
 from habitat.tasks.rearrange.rearrange_task import ADD_CACHE_KEY, RearrangeTask
 from habitat.tasks.rearrange.utils import CacheHelper, rearrange_logger
+from habitat.tasks.utils import get_angle
 
 
 @dataclass
@@ -115,7 +115,7 @@ class DynNavRLEnv(RearrangeTask):
 
         for entity in self.pddl_problem.all_entities.values():
             if entity.expr_type.is_subtype_of(
-                self.pddl_problem.expr_types[RIGID_OBJ_TYPE]
+                self.pddl_problem.expr_types[OBJ_TYPE]
             ):
                 # The robot could be at this object.
                 new_pred = self.pddl_problem.predicates["robot_at"].clone()
@@ -219,7 +219,22 @@ class DynNavRLEnv(RearrangeTask):
 
         allowed_tasks = self._get_allowed_tasks(must_include_entities)
         if len(allowed_tasks) == 0:
-            raise ValueError("Got no allowed tasks.")
+            breakpoint()
+            # Try our best and return a point close to an object we wanted to
+            # interact with.
+            entity = must_include_entities[0]
+            entity_pos = self.pddl_problem.sim_info.get_entity_pos(entity)
+            robo_pos = self._sim.safe_snap_point(entity_pos)
+            rel_pos = (entity_pos - robo_pos)[[0, 2]]
+            forward = np.array([1.0, 0])
+            angle_to_target = get_angle(forward, rel_pos)
+
+            return NavToInfo(
+                nav_target_pos=np.array(robo_pos),
+                nav_target_angle=angle_to_target,
+                nav_to_entity_name=entity.name,
+                nav_to_task_name="",
+            )
 
         any_key = next(iter(allowed_tasks))
         nav_to_task = allowed_tasks[any_key][0]

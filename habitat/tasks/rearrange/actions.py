@@ -240,7 +240,7 @@ class BaseVelAction(RobotAction):
         self.base_vel_ctrl.controlling_ang_vel = True
         self.base_vel_ctrl.ang_vel_is_local = True
 
-        self.has_stop_action = True
+        self.has_stop_action = False
 
     @property
     def end_on_stop(self):
@@ -254,10 +254,10 @@ class BaseVelAction(RobotAction):
                 self._action_arg_prefix
                 + "base_vel": spaces.Box(
                     shape=(2,), low=-lim, high=lim, dtype=np.float32
-                ), 
+                ),
                 "nav_stop": spaces.Box(
-                shape=(1,), low=-lim, high=lim, dtype=np.float32
-            )
+                    shape=(1,), low=-lim, high=lim, dtype=np.float32
+                ),
             }
         )
 
