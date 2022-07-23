@@ -17,7 +17,8 @@ from habitat_baselines.common.tensor_dict import TensorDict
 def read_dataset(
     config: Config, 
     verbose: bool,
-    rng: np.random.Generator
+    rng: np.random.Generator,
+    context_length: int = 30
 ):        
     obss = []
     actions = []
@@ -27,7 +28,7 @@ def read_dataset(
     path = config.trajectory_dir
 
     filenames = os.listdir(path)
-    # filenames = ['{}.pt'.format(i*10) for i in range(1,2)]
+    # filenames = ['{}.pt'.format(i*10) for i in range(1,51)]
 
     if verbose:
         logger.info(
@@ -70,6 +71,23 @@ def read_dataset(
             # temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
             # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
+            #===================== Only Nav Pick ====================
+            temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
+            temp_start_idxs = np.roll(temp_done_idxs, 1)
+            temp_start_idxs[0] = 0
+            temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
+            temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
+            temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
+            temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
+            temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
+            stepwise_idx = np.concatenate([np.arange(temp_nav_phase[i] + 1 , temp_done_idxs[i]) for i in range(temp_nav_phase.shape[0])])
+            
+            temp_dones[temp_nav_phase] = False
+            temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+            temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+            temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+            temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+
             
             #==================== Only Successful Episodes ===================
             # stepwise_idx = np.argwhere(temp_infos == False).squeeze()
@@ -81,14 +99,14 @@ def read_dataset(
             
             temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
             if len(temp_done_idxs) == 0:
-                print("EVEN NO SUCCESS IN THIS FILE!!!!!!")
+                print("\n\nEVEN NO SUCCESS IN THIS FILE!!!!!!", temp_start_idxs, temp_nav_phase)
                 continue
             
-            #==================== Only Episodes that are larger than 30 ===================
-            temp_start_idxs = np.roll(temp_done_idxs, -1)
+            #==================== Only Episodes that are larger than context_length ===================
+            temp_start_idxs = np.roll(temp_done_idxs, 1)
             temp_start_idxs[0] = 0
 
-            idx = np.nonzero(temp_done_idxs[:] - temp_start_idxs[:] < 30)[0]
+            idx = np.nonzero(temp_done_idxs[:] - temp_start_idxs[:] < context_length)[0]
             if len(idx) > 0:
 
                 stepwise_idx = np.concatenate([np.arange(temp_start_idxs[i] , temp_done_idxs[i]) for i in idx])
@@ -109,15 +127,12 @@ def read_dataset(
             temp_pick_action = temp_pick_action[temp_place_idx].reshape(-1)
             stepwise_idx = np.concatenate([np.arange(temp_pick_action[i] , temp_done_idxs[i]) for i in range(temp_pick_action.shape[0])])
             temp_actions[stepwise_idx, 7] = 0
-
-            #===================== Filter out unnecessary jitters ====================
-            # temp_actions[:,8][np.abs(temp_actions[:,8]) < 0.3] = 0.
-            # temp_actions[:,9][np.abs(temp_actions[:,9]) < 0.3] = 0.
             
+            #========================================================
             l = temp_done_idxs[1:] - temp_done_idxs[:-1]
             # debug
             assert all(l <= 1000), f"Length too long: file:  {file}  dn:  {temp_done_idxs}"
-            # assert all(l >= 30), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
+            # assert all(l >= context_length), f"Length too short: file:  {file}  dn:  {temp_done_idxs}"
             # print(f"file:  {file}  dn:  {temp_done_idxs}")
 
             obss += [temp_obs]

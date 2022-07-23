@@ -45,7 +45,7 @@ class StateActionReturnDataset(Dataset):
             idx, done_idx = 0, block_size
             print(f"ERROR on indexing, idx: {idx}, done_idx: {done_idx}, {self.done_idxs}")
         states = self.data[idx:done_idx]
-        assert (len(states) == 30), "Error on states length"
+        assert (len(states) == self.block_size), "Error on states length"
         
         actions = torch.tensor(self.actions[idx:done_idx], dtype=torch.float32).unsqueeze(1) # (block_size, 1)
         rtgs = torch.tensor(self.rtgs[idx:done_idx], dtype=torch.float32).unsqueeze(1)
@@ -135,7 +135,7 @@ class RollingDataset(IterableDataset):
 
             rng = np.random.default_rng(self.seed + self.id)
             if self.producer is None:
-                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False)) # config, np.RNG, queue, verbose
+                self.producer = Thread(target=producer, args=(self.config, rng, self.queue, False, self.context_length)) # config, np.RNG, queue, verbose
                 self.producer.start()
             # print(self.producer.is_alive() )
 

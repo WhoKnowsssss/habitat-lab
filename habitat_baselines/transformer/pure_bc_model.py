@@ -11,96 +11,7 @@ logger = logging.getLogger(__name__)
 
 import numpy as np
 
-class GELU(nn.Module):
-    def forward(self, input):
-        return F.gelu(input)
-
-class GPTConfig:
-    """ base GPT config, params common to all GPT versions """
-    embd_pdrop = 0.1
-    resid_pdrop = 0.1
-    attn_pdrop = 0.1
-
-    def __init__(self, vocab_size, block_size, **kwargs):
-        self.vocab_size = vocab_size
-        self.block_size = block_size
-        for k,v in kwargs.items():
-            setattr(self, k, v)
-
-class GPT1Config(GPTConfig):
-    """ GPT-1 like network roughly 125M params """
-    n_layer = 12
-    n_head = 12
-    n_embd = 768
-
-class CausalSelfAttention(nn.Module):
-    """
-    A vanilla multi-head masked self-attention layer with a projection at the end.
-    It is possible to use torch.nn.MultiheadAttention here but I am including an
-    explicit implementation here to show that there is nothing too scary here.
-    """
-
-    def __init__(self, config):
-        super().__init__()
-        assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads
-        self.key = nn.Linear(config.n_embd, config.n_embd)
-        self.query = nn.Linear(config.n_embd, config.n_embd)
-        self.value = nn.Linear(config.n_embd, config.n_embd)
-        # regularization
-        self.attn_drop = nn.Dropout(config.attn_pdrop)
-        self.resid_drop = nn.Dropout(config.resid_pdrop)
-        # output projection
-        self.proj = nn.Linear(config.n_embd, config.n_embd)
-        # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size))
-        self.n_head = config.n_head
-
-    def forward(self, x, layer_past=None):
-        B, T, C = x.size()
-
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))
-        # if attention_mask is not None: 
-        #     att = att.masked_fill(attention_mask.repeat(T,self.n_head,1,1).transpose(0,2) == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-
-        att = self.attn_drop(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-
-        # output projection
-        y = self.resid_drop(self.proj(y))
-        return y
-
-class Block(nn.Module):
-    """ an unassuming Transformer block """
-
-    def __init__(self, config):
-        super().__init__()
-        self.ln1 = nn.LayerNorm(config.n_embd)
-        self.ln2 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config)
-        self.mlp = nn.Sequential(
-            nn.Linear(config.n_embd, 4 * config.n_embd),
-            GELU(),
-            nn.Linear(4 * config.n_embd, config.n_embd),
-            nn.Dropout(config.resid_pdrop),
-        )
-
-    def forward(self, x):
-        x = x + self.attn(self.ln1(x))
-        x = x + self.mlp(self.ln2(x))
-        return x
-
-class GPT(nn.Module):
+class LSTMBC(nn.Module):
     """  the full GPT language model, with a context size of block_size """
 
     def __init__(self, config):
@@ -119,16 +30,17 @@ class GPT(nn.Module):
         self.n_embd = config.n_embd
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
+        # self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
         self.drop = nn.Dropout(config.embd_pdrop)
 
         # transformer
-        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.blocks = nn.LSTM(self.n_embd, self.n_embd, num_layers=2, batch_first=True, dropout=0.1)
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, 2, bias=False)
-        # self.head = nn.Linear(config.n_embd, 2*11, bias=False)
+        # self.head = nn.Linear(config.n_embd, 18, bias=False)
         # self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
         self.head_2 = nn.Linear(config.n_embd, 7*11, bias=False)
 
@@ -136,7 +48,6 @@ class GPT(nn.Module):
         self.head_4 = nn.Linear(config.n_embd, 1, bias=False)
         self.focal_loss = FocalLoss(
             alpha=torch.tensor([0.05,0.0125,0.0125,0.0125,0.0125,0.8,0.0125,0.0125,0.0125,0.0125,0.05]), gamma=5).cuda()
-        self.focal_loss_loc = FocalLoss(gamma=5).cuda()
 
         self.action_normalization = ActionNorm(mean=torch.tensor([0.4667095,  0.00209379]), std=torch.tensor([0.61708325, 0.9862876])).cuda()
         
@@ -242,7 +153,6 @@ class GPT(nn.Module):
         
         if actions is not None and self.model_type == 'reward_conditioned': 
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
-            actions = torch.clone(actions)
             actions[:,:,:7] = (torch.bucketize(actions[:,:,:7], self.boundaries) - 1) / 10
             actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
             actions = actions.type(torch.float32)
@@ -251,68 +161,30 @@ class GPT(nn.Module):
                 actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
-            token_embeddings = torch.zeros((states.shape[0], self.num_inputs * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
+            token_embeddings = torch.zeros((states.shape[0], (self.num_inputs -1) * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
             
-            token_embeddings[:,::self.num_inputs,:] = rtg_embeddings
+            # token_embeddings[:,::self.num_inputs,:] = rtg_embeddings
 
             # for i in range(len(state_inputs)):
             #     token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
-            token_embeddings[:,1::self.num_inputs,:] = state_inputs[0]
-            token_embeddings[:,2::self.num_inputs,:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
-            
-            token_embeddings[:,(self.num_inputs-1)::self.num_inputs,:] = action_embeddings
-        
-        
-        elif actions is None and self.model_type == 'reward_conditioned': # only happens at very first timestep of evaluation
-            rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
-
-            token_embeddings = torch.zeros((states.shape[0], states.shape[1]*2, self.config.n_embd), dtype=torch.float32, device=state_embeddings.device)
-            token_embeddings[:,::2,:] = rtg_embeddings # really just [:,0,:]
-            token_embeddings[:,1::2,:] = state_embeddings # really just [:,1,:]
-        elif actions is not None and self.model_type == 'bc':
-            actions = torch.clone(actions)
-            actions[:,:,:7] = (torch.bucketize(actions[:,:,:7], self.boundaries) - 1) / 10
-            actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
-            # actions[:,:,[8,9]] = (torch.bucketize(actions[:,:,[8,9]], self.boundaries) - 1) / 10
-            actions = actions.type(torch.float32)
-            # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
-            if actions.shape[-1] == 12:
-                actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
-            action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
-
-            token_embeddings = torch.zeros((states.shape[0], (self.num_inputs - 1) * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
-
             token_embeddings[:,::(self.num_inputs-1),:] = state_inputs[0]
             token_embeddings[:,1::(self.num_inputs-1),:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
             
             token_embeddings[:,(self.num_inputs-2)::(self.num_inputs-1),:] = action_embeddings
-        elif actions is None and self.model_type == 'naive': # only happens at very first timestep of evaluation
-            token_embeddings = state_embeddings
-        else:
-            raise NotImplementedError()
 
-        batch_size = states.shape[0]
-        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
-
-        # position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
-        position_embeddings = self.pos_emb[:, :token_embeddings.shape[1], :]
-
-        x = self.drop(token_embeddings + position_embeddings)
-        x = self.blocks(x)
+        x, _ = self.blocks(token_embeddings)
+            
         x = self.ln_f(x)
 
         if actions is not None and self.model_type == 'reward_conditioned':
-            logits_loc = self.head(x[:, (self.num_inputs-2)::self.num_inputs, :]) # only keep predictions from state_embeddings
-            logits_arm = self.head_2(x[:, (self.num_inputs-2)::self.num_inputs, :])
-            logits_pick = self.head_3(x[:, (self.num_inputs-2)::self.num_inputs, :])
-            logits_stop = self.head_4(x[:, (self.num_inputs-2)::self.num_inputs, :])
-        elif actions is None and self.model_type == 'reward_conditioned':
-            logits = logits[:, 1:, :]
-        elif actions is not None and self.model_type == 'bc':
             logits_loc = self.head(x[:, (self.num_inputs-3)::(self.num_inputs-1), :]) # only keep predictions from state_embeddings
             logits_arm = self.head_2(x[:, (self.num_inputs-3)::(self.num_inputs-1), :])
             logits_pick = self.head_3(x[:, (self.num_inputs-3)::(self.num_inputs-1), :])
             logits_stop = self.head_4(x[:, (self.num_inputs-3)::(self.num_inputs-1), :])
+        elif actions is None and self.model_type == 'reward_conditioned':
+            logits = logits[:, 1:, :]
+        elif actions is not None and self.model_type == 'naive':
+            logits = logits[:, ::2, :] # only keep predictions from state_embeddings
         elif actions is None and self.model_type == 'naive':
             logits = logits # for completeness
         else:
@@ -331,27 +203,19 @@ class GPT(nn.Module):
             # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
             # temp_target = torch.bucketize(targets[:,:,[8,9]], boundaries) - 1
             # loss1 = F.cross_entropy(logits_loc[:,:,:9].permute(0,2,1), temp_target[:,:,0], label_smoothing=0.05) + F.cross_entropy(logits_loc[:,:,9:].permute(0,2,1), temp_target[:,:,1], label_smoothing=0.05)
-            temp_target = self.action_normalization(targets[:,:,[8,9]])
-            # temp_target = torch.bucketize(targets[:,:,[8,9]], self.boundaries) - 1
-
-            # logits_loc = logits_loc.view(*logits_loc.shape[:2], 2, 11)
-
-            # loss1 = self.focal_loss_loc(logits_loc[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:])
-            accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:,:], dim=-1) == temp_target[:,:,:]) / np.prod(temp_target[:,:,:].shape)
-
-            # loss1 = F.mse_loss(logits_loc, temp_target, reduction='none')
+            targets[:,:,[8,9]] = self.action_normalization(targets[:,:,[8,9]])
+            loss1 = F.mse_loss(logits_loc, targets[:,:,[8,9]], reduction='none')
 
             temp_target = torch.bucketize(targets[:,:,:7], self.boundaries) - 1
             logits_arm = logits_arm.view(*logits_arm.shape[:2], 7, 11)
             # loss2 = F.cross_entropy(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7], label_smoothing=0.00)
             loss2 = self.focal_loss(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7])
-            accuracy2 = torch.sum(torch.argmax(logits_arm[:,:,:,:], dim=-1) == temp_target[:,:,:7]) / np.prod(temp_target[:,:,:7].shape)
             # loss2 = F.mse_loss(torch.tanh(logits_arm[:,:,:8]), targets[:,:,:8], reduction='none')
             # mask1 = torch.all(targets[:,:,[8,9]] == 0, dim=-1)
             # mask2 = torch.all(targets[:,:,:7] == 0, dim=-1)
             # loss1[~mask2] = 0.
             # loss2[~mask1] = 0.
-            # loss1 = torch.mean(loss1)
+            loss1 = torch.mean(loss1)
             # loss2 = torch.mean(loss2)
 
             # temp_target = mask1 + 2 * mask2 - 1
@@ -359,12 +223,7 @@ class GPT(nn.Module):
 
             # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,:,7]), (1-0.2) * (targets[:,:,7] >= 0).to(torch.float32) + 0.2 * 0.5)
             loss3 = F.cross_entropy(logits_pick.permute(0,2,1), torch.round(targets[:,:,7]).long() + 1, label_smoothing=0.1)
-            loss_dict = {
-                "locomotion": loss1.detach().item(), 
-                "arm": loss2.detach().item(), 
-                "pick": loss3.detach().item(), 
-                "accuracy_loc": accuracy1.detach().item(),
-                "accuracy_arm": accuracy2.detach().item()} #, "phase": loss4.detach().item()
+            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "pick": loss3.detach().item()} #, "phase": loss4.detach().item()
             loss1 = torch.exp(-self.loss_vars[0]) * loss1 + self.loss_vars[0]
             loss2 = torch.exp(-self.loss_vars[1]) * loss2 + self.loss_vars[1]
             loss3 = torch.exp(-self.loss_vars[2]) * loss3 + self.loss_vars[2]

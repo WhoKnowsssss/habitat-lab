@@ -6,17 +6,17 @@ SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
 VIDEO_OPTION: ["disk"]
 TENSORBOARD_DIR: "tb"
-VIDEO_DIR: "video_dir/nav_pick_nav_place_nn_mask_debug"
+VIDEO_DIR: "video_dir/nav_pick_nav_place_varysize_np_2"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_nn_10k_larger" #nav_pick_nav_place_nn_2
+EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_5k_np" #nav_pick_nav_place_nn_2
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
 SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
-CHECKPOINT_FOLDER: "data/ckpts/npnp_nn_10k_evenlarger"
+CHECKPOINT_FOLDER: "data/ckpts/npnp_5k_np_discrete"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
 LOG_INTERVAL: 1
@@ -41,7 +41,7 @@ RL:
   GYM_OBS_KEYS: ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint', 'is_holding'] #
 
   TRAJECTORY_DATASET:
-    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_06_13_rgb/"
+    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_06_20_5k"
     files_per_load: 1
     steps_to_reload: 5000
     trajs_per_file: 10
@@ -52,18 +52,19 @@ RL:
     eps: 1.0E-5
     grad_norm_clip: 0.5
     use_linear_lr_decay: True
-    batch_size: 40 # 100
+    batch_size: 80 # 100
     num_workers: 2
 
 
 
 
-    return_to_go: 250
+    return_to_go: 100
     
     num_mini_batch: 2
-    context_length: 30
+    context_length: 90
     max_episode_step: 500
-    model_type: "reward_conditioned"
+    # model_type: "reward_conditioned"
+    model_type: "bc"
     n_head: 8
     n_layer: 12
     use_linear_clip_decay: False
@@ -71,7 +72,7 @@ RL:
 
     use_normalized_advantage: False
 
-    hidden_size: 1024
+    hidden_size: 512
 
     # Use double buffered sampling, typically helps
     # when environment time is similar or large than
@@ -99,5 +100,5 @@ WB:
   PROJECT_NAME: "habitat"
   ENTITY: "haytham-huang"
   RUN_NAME: "npnp_debug"
-  GROUP: "nav_pick"
+  GROUP: "nav_pick_nav_place_5k"
 

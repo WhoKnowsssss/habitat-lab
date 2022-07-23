@@ -34,7 +34,7 @@ from habitat.utils import profiling_wrapper
 from habitat.utils.visualizations.utils import observations_to_image
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
-from habitat_baselines.common.environments import get_env_class
+from habitat.core.environments import get_env_class
 from habitat_baselines.common.tensor_dict import TensorDict
 from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
@@ -73,8 +73,8 @@ from habitat_baselines.utils.common import (
     get_num_actions,
     is_continuous_action_space,
 )
-from habitat_baselines.utils.env_utils import construct_envs
-from habitat_baselines.utils.render_wrapper import overlay_frame
+from habitat.utils.env_utils import construct_envs
+from habitat.utils.render_wrapper import overlay_frame
 
 
 @baseline_registry.register_trainer(name="transformer")
@@ -823,22 +823,28 @@ class TransformerTrainer(BaseRLTrainer):
                     valid_context=valid_context,
                 )
             self.gt_actions[idxxx] = torch.clamp(self.gt_actions[idxxx], -1, 1)
+            print(idxxx, self.gt_actions[idxxx][8:10], self.transformer_policy.net.state_encoder.action_normalization(self.gt_actions[idxxx][8:10].cuda()))
             logits = torch.zeros((1, 11),device=logits_loc.device)
             # logits[:,:8] = torch.tanh(logits_arm[:,:8])
-            # logits_picka = torch.argmax(logits_pick,dim=-1)
-            # logits[:,7] = logits_picka - 1
+            logits_picka = torch.argmax(logits_pick,dim=-1)
+            logits[:,7] = logits_picka - 1
             # logits[:,7:8][logits[:,7:8]==0] = -1
             # logits[:,[8,9]] = logits_loc[:,:]
             # logits[:,8] = logits_loc == 1
             # logits[:,9] = logits_loc - 1
             # logits[:,9:-1][logits[:,9:-1]==2] = 0
             # logits[:,:8] = 0.
+            # boundaries = torch.tensor([-1.1, -0.9, -0.7, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1]).cuda()
+            logits_arm = logits_arm.view(logits_arm.shape[0], 7, 11)
             logits[:,8:10] = logits_loc
-            # if torch.any(torch.abs(torch.tanh(logits[:,:7])) > 0.2):
-            #     logits[:,8:10] = 0.
-            # boundaries_mean = torch.tensor([-1.0, -0.7, -0.4, -0.2, 0., 0.2, 0.4, 0.7, 1.0]).cuda()
+            # logits_loc = logits_loc.view(logits_loc.shape[0], 2, 11)
+            boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
+            logits[:,:7] = boundaries_mean[torch.argmax(logits_arm, dim=-1)]
+            # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
             # logits[:,8] = boundaries_mean[torch.argmax(logits_loc[:,:9], dim=-1)]
             # logits[:,9] = boundaries_mean[torch.argmax(logits_loc[:,9:], dim=-1)]
+            if torch.any(logits[:,:7] != 0.):
+                logits[:,8:10] = 0.
             actions = logits
             if idxxx < -1:
                 actions = self.gt_actions[idxxx].unsqueeze(0).cuda()
@@ -1139,7 +1145,7 @@ class TransformerTrainer(BaseRLTrainer):
                         obj_goal_gps_compass=observations[i]['obj_goal_gps_compass'].tolist()[0],
                         obj_goal_gps_compass_angle=observations[i]['obj_goal_gps_compass'].tolist()[1],
                         # pick_action0=logits_pick[i,0].item(),
-                        pick_action=logits_arm[i,-1].item(),
+                        pick_action=logits_pick[i,0].item(),
                         pick_action1=logits_pick[i,1].item(),
                         pick_action2=logits_pick[i,2].item(),
                         obj_goal_sensor=np.linalg.norm(observations[i]['obj_goal_sensor']),
