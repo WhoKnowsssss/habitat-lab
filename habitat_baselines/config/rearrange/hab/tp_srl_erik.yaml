@@ -1,59 +1,18 @@
 VERBOSE: False
-BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick.yaml
+BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick_nav_place.yaml
 TASK_CONFIG:
   TASK:
-    REWARD_MEASURE: "composite_reward"
+    POSSIBLE_ACTIONS:
+    - ARM_ACTION
+    - BASE_VELOCITY
+    - REARRANGE_STOP
+    - ORACLE_NAV_ACTION
+    REWARD_MEASURE: "move_obj_reward"
     SUCCESS_MEASURE: "composite_success"
     SUCCESS_REWARD: 100.0
     SLACK_REWARD: -0.01
-    USING_SUBTASKS: True
-    SENSORS:
-      - TARGET_START_SENSOR
-      - GOAL_SENSOR
-      - ABS_GOAL_SENSOR
-      - JOINT_SENSOR
-      - IS_HOLDING_SENSOR
-      - END_EFFECTOR_SENSOR
-      - RELATIVE_RESTING_POS_SENSOR
-      - TARGET_START_POINT_GOAL_SENSOR
-      - NAV_TO_SKILL_SENSOR
-      - MARKER_REL_POS_SENSOR
-      - ART_JOINT_SENSOR
-        # Sensors needed for oracle navigation.
-      - DIST_TO_NAV_GOAL
-      - ORACLE_NAV_ACTION_SENSOR
-      - ABS_TARGET_START_SENSOR
-      - LOCALIZATION_SENSOR
-      - NAV_GOAL_SENSOR
-    MEASUREMENTS:
-      - OBJECT_TO_GOAL_DISTANCE
-      - ROBOT_FORCE
-      - FORCE_TERMINATE
-      - ROBOT_COLLS
-      - END_EFFECTOR_TO_REST_DISTANCE
-      - END_EFFECTOR_TO_OBJECT_DISTANCE
-      - OBJ_AT_GOAL
-      - ROT_DIST_TO_GOAL
-      - DIST_TO_GOAL
-      - BAD_CALLED_TERMINATE
-      - NAV_TO_POS_SUCC
-      - REARRANGE_NAV_TO_OBJ_SUCCESS
-      - REARRANGE_NAV_TO_OBJ_REWARD
-      - PICK_SUCCESS
-      - PICK_REWARD
-      - PLACE_SUCCESS
-      - PLACE_REWARD
-      - COMPOSITE_NODE_IDX
-      - COMPOSITE_SUCCESS
-      - COMPOSITE_REWARD
-      - NUM_STEPS
-      - DID_VIOLATE_HOLD_CONSTRAINT
-      - EE_DIST_TO_MARKER
-      - ART_OBJ_AT_DESIRED_STATE
-      - ART_OBJ_STATE
-      - ART_OBJ_SUCCESS
-      - ART_OBJ_REWARD
-      - MOVE_OBJECTS_REWARD
+    USING_SUBTASKS: False
+
 TRAINER_NAME: "ddppo"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
@@ -63,13 +22,15 @@ TENSORBOARD_DIR: "tb"
 VIDEO_DIR: "video_dir"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
+VIDEO_RENDER_VIEWS:
+  - "THIRD_RGB_SENSOR"
 VIDEO_RENDER_ALL_INFO: True
 TEST_EPISODE_COUNT: -1
 EVAL_CKPT_PATH_DIR: "data/new_checkpoints"
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'tb'
 # Visual sensors to include
-SENSORS: ["HEAD_DEPTH_SENSOR"]
+SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
 CHECKPOINT_FOLDER: "data/new_checkpoints"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
@@ -90,6 +51,9 @@ DATASET_SAVE_VISUAL_ENCODED: False
 
 RL:
   POLICY:
+      ACTION_DIST: 
+        log_std_init: 0.0
+
       name: "HierarchicalPolicy"
       high_level_policy:
         name: "GtHighLevelPolicy"
@@ -162,19 +126,31 @@ RL:
           MAX_SKILL_STEPS: 200
           FORCE_END_ON_TIMEOUT: True
 
+        NN_NAV:
+          skill_name: "NavSkillPolicy"
+          name: "ErikPointNavResNetPolicy"
+          action_distribution_type: "gaussian"
+          OBS_SKILL_INPUTS: ["object_to_agent_gps_compass"]
+          OBS_SKILL_INPUT_DIM: 2
+          LIN_SPEED_STOP: 0.067
+          ANG_SPEED_STOP: 0.067
+          LOAD_CKPT_FILE: "data/models/nav_latest.pth"
+          MAX_SKILL_STEPS: 300
+          FORCE_END_ON_TIMEOUT: False
+          LIN_SPEED: 15.0
+          ANG_SPEED: 15.0
+          DELTA_POS_LIMIT: 0.025
+          NO_NAV: False
+        
         GT_NAV:
           skill_name: "OracleNavPolicy"
           OBS_SKILL_INPUTS: ["obj_start_sensor", "abs_obj_start_sensor", "obj_goal_sensor", "abs_obj_goal_sensor"]
           GOAL_SENSORS: ["obj_goal_sensor", "abs_obj_goal_sensor"]
-          # GT nav
-          TURN_THRESH: 0.1
-          DIST_THRESH: 0.2
-          LOOK_AT_OBJ_THRESH: 0.2
-          TURN_VELOCITY: 1.0
-          FORWARD_VELOCITY: 1.0
-          MAX_SKILL_STEPS: 300
           NAV_ACTION_NAME: "BASE_VELOCITY"
-          FORCE_END_ON_TIMEOUT: False
+          MAX_SKILL_STEPS: 300
+          FORCE_END_ON_TIMEOUT: True
+          STOP_ANGLE_THRESH: 0.2
+          STOP_DIST_THRESH: 1.2
 
         WAIT_SKILL:
           skill_name: "WaitSkillPolicy"

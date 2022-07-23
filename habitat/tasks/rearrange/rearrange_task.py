@@ -5,8 +5,11 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
-from typing import Any, Dict, List, Union
+import os.path as osp
+from collections import OrderedDict
+from typing import Any, Dict, List, Tuple, Union
 
+import gym.spaces as spaces
 import numpy as np
 
 from habitat.core.dataset import Episode
@@ -14,7 +17,9 @@ from habitat.core.registry import registry
 from habitat.tasks.nav.nav import NavigationTask
 from habitat.tasks.rearrange.rearrange_sim import RearrangeSim
 from habitat.tasks.rearrange.utils import (
+    CacheHelper,
     CollisionDetails,
+    UsesRobotInterface,
     rearrange_collision,
     rearrange_logger,
 )
@@ -38,9 +43,28 @@ class RearrangeTask(NavigationTask):
     """
 
     _cur_episode_step: int
+    _robot_pos_start: Dict[str, Tuple[np.ndarray, float]]
 
     def overwrite_sim_config(self, sim_config, episode):
         return merge_sim_episode_with_object_config(sim_config, episode)
+
+    def _duplicate_sensor_suite(self, sensor_suite, copy_all):
+        task_new_sensors = OrderedDict()
+        task_obs_spaces = OrderedDict()
+        for robot_idx, agent_id in enumerate(self._sim.robots_mgr.agent_names):
+            for sensor_name, sensor in sensor_suite.sensors.items():
+                if copy_all or isinstance(sensor, UsesRobotInterface):
+                    new_sensor = copy.copy(sensor)
+                    new_sensor.robot_id = robot_idx
+                    full_name = f"{agent_id}_{sensor_name}"
+                    task_new_sensors[full_name] = new_sensor
+                    task_obs_spaces[full_name] = new_sensor.observation_space
+                else:
+                    task_new_sensors[sensor_name] = sensor
+                    task_obs_spaces[sensor_name] = sensor.observation_space
+
+        sensor_suite.sensors = task_new_sensors
+        sensor_suite.observation_spaces = spaces.Dict(spaces=task_obs_spaces)
 
     def __init__(self, *args, sim, dataset=None, **kwargs) -> None:
         self.n_objs = len(dataset.episodes[0].targets)
@@ -54,6 +78,26 @@ class RearrangeTask(NavigationTask):
         self._targ_idx: int = 0
         self._episode_id: str = ""
         self._cur_episode_step = 0
+
+        data_path = dataset.config.DATA_PATH.format(split=dataset.config.SPLIT)
+        fname = data_path.split("/")[-1].split(".")[0]
+        cache_path = osp.join(
+            osp.dirname(data_path), f"{fname}_robot_start.pickle"
+        )
+
+        if self._config.CACHE_ROBOT_INIT or osp.exists(cache_path):
+            self._robot_init_cache = CacheHelper(
+                cache_path,
+                def_val={},
+                verbose=False,
+            )
+            self._robot_pos_start = self._robot_init_cache.load()
+        else:
+            self._robot_pos_start = None
+
+        if len(self._sim.robots_mgr) > 1:
+            # Duplicate sensors that handle robots. One for each robot.
+            self._duplicate_sensor_suite(self.sensor_suite, False)
 
     @property
     def targ_idx(self):
@@ -75,6 +119,26 @@ class RearrangeTask(NavigationTask):
     def set_sim_reset(self, sim_reset):
         self._sim_reset = sim_reset
 
+    def _set_robot_start(self, agent_idx: int) -> None:
+        start_ident = f"{self._episode_id}_{agent_idx}"
+        if (
+            self._robot_pos_start is None
+            or start_ident not in self._robot_pos_start
+        ):
+            robot_pos, robot_rot = self._sim.set_robot_base_to_random_point(
+                agent_idx=agent_idx
+            )
+            if (
+                self._robot_pos_start is not None
+                and self._config.SHOULD_SAVE_TO_CACHE
+            ):
+                self._robot_init_cache.save(self._robot_pos_start)
+        else:
+            robot_pos, robot_rot = self._robot_pos_start[start_ident]
+            robot = self._sim.get_robot_data(agent_idx).robot
+            robot.base_pos = robot_pos
+            robot.base_rot = robot_rot
+
     def reset(self, episode: Episode, fetch_observations: bool = True):
         self._episode_id = episode.episode_id
         self._ignore_collisions = []
@@ -84,7 +148,9 @@ class RearrangeTask(NavigationTask):
             for action_instance in self.actions.values():
                 action_instance.reset(episode=episode, task=self)
             self._is_episode_active = True
-            self._sim.set_robot_base_to_random_point()
+
+            for agent_idx in range(self._sim.num_robots):
+                self._set_robot_start(agent_idx)
 
         self.prev_measures = self.measurements.get_metrics()
         self._targ_idx = 0
@@ -113,6 +179,12 @@ class RearrangeTask(NavigationTask):
 
         self.prev_coll_accum = copy.copy(self.coll_accum)
         self._cur_episode_step += 1
+        for grasp_mgr in self._sim.robots_mgr.grasp_iter:
+            if (
+                grasp_mgr.is_violating_hold_constraint()
+                and self._config.CONSTRAINT_VIOLATION_DROPS_OBJECT
+            ):
+                grasp_mgr.desnap(True)
 
         return obs
 
@@ -127,11 +199,14 @@ class RearrangeTask(NavigationTask):
         if self.should_end:
             done = True
 
-        if (
-            self._sim.grasp_mgr.is_violating_hold_constraint()
-            and self._config.CONSTRAINT_VIOLATION_ENDS_EPISODE
-        ):
-            done = True
+        # Check that none of the robots are violating the hold constraint
+        for grasp_mgr in self._sim.robots_mgr.grasp_iter:
+            if (
+                grasp_mgr.is_violating_hold_constraint()
+                and self._config.CONSTRAINT_VIOLATION_ENDS_EPISODE
+            ):
+                done = True
+                break
 
         if done:
             rearrange_logger.debug("-" * 10)
@@ -140,9 +215,11 @@ class RearrangeTask(NavigationTask):
 
         return not done
 
-    def get_coll_forces(self):
-        snapped_obj = self._sim.grasp_mgr.snap_idx
-        robot_id = self._sim.robot.sim_obj.object_id
+    def get_coll_forces(self, robot_id):
+        grasp_mgr = self._sim.get_robot_data(robot_id).grasp_mgr
+        robot = self._sim.get_robot_data(robot_id).robot
+        snapped_obj = grasp_mgr.snap_idx
+        robot_id = robot.sim_obj.object_id
         contact_points = self._sim.get_physics_contact_points()
 
         def get_max_force(contact_points, check_id):
@@ -175,10 +252,9 @@ class RearrangeTask(NavigationTask):
         max_robot_force = get_max_force(contact_points, robot_id)
         return max_robot_force, max_obj_force, max_force
 
-    def get_cur_collision_info(self) -> CollisionDetails:
+    def get_cur_collision_info(self, agent_idx) -> CollisionDetails:
         _, coll_details = rearrange_collision(
-            self._sim,
-            self._config.COUNT_OBJ_COLLISIONS,
+            self._sim, self._config.COUNT_OBJ_COLLISIONS, agent_idx=agent_idx
         )
         return coll_details
 
