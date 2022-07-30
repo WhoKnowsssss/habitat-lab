@@ -259,6 +259,8 @@ _C.TASK.JOINT_VELOCITY_SENSOR.DIMENSIONALITY = 7
 # -----------------------------------------------------------------------------
 _C.TASK.ORACLE_NAV_ACTION_SENSOR = CN()
 _C.TASK.ORACLE_NAV_ACTION_SENSOR.TYPE = "OracleNavigationActionSensor"
+_C.TASK.EXECUTED_ORACLE_NAV_ACTION_SENSOR = CN()
+_C.TASK.EXECUTED_ORACLE_NAV_ACTION_SENSOR.TYPE = "ExecutedOracleNavActionSensor"
 # -----------------------------------------------------------------------------
 # RESTING POSITION SENSOR
 # -----------------------------------------------------------------------------
