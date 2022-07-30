@@ -50,6 +50,7 @@ class OracleNavAction(BaseVelAction):
 
     def reset(self, *args, **kwargs):
         super().reset(*args, **kwargs)
+        self.last_action = [0, 0]
         if self._task._episode_id != self._prev_ep_id:
             self._targets = {}
             self._prev_ep_id = self._task._episode_id
@@ -137,6 +138,7 @@ class OracleNavAction(BaseVelAction):
                 )
         else:
             vel = [0, 0]
+        self.last_action = vel
 
         kwargs[f"{self._action_arg_prefix}base_vel"] = np.array(vel)
         return super().step(*args, is_last_action=is_last_action, **kwargs)
