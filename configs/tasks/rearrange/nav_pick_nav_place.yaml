@@ -2,6 +2,7 @@ GYM:
     AUTO_NAME: NavPickNavPlace
     OBS_KEYS:
     - robot_head_depth
+    - robot_head_rgb
     - relative_resting_position
     - obj_start_sensor
     - obj_goal_sensor
@@ -113,6 +114,7 @@ SIMULATOR:
         RADIUS: 0.3
         SENSORS:
         - HEAD_DEPTH_SENSOR
+        - HEAD_RGB_SENSOR
         ROBOT_URDF: ./data/robots/hab_fetch/robots/hab_fetch.urdf
         ROBOT_TYPE: FetchRobot
         IK_ARM_URDF: ./data/robots/hab_fetch/robots/fetch_onlyarm.urdf

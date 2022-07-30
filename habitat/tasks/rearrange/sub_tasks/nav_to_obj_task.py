@@ -219,7 +219,6 @@ class DynNavRLEnv(RearrangeTask):
 
         allowed_tasks = self._get_allowed_tasks(must_include_entities)
         if len(allowed_tasks) == 0:
-            breakpoint()
             # Try our best and return a point close to an object we wanted to
             # interact with.
             entity = must_include_entities[0]
