@@ -440,6 +440,11 @@ class PddlProblem(PddlDomain):
         for action in self.actions.values():
             action.set_precond(self.expand_quantifiers(action.precond))
 
+    def set_init(self):
+        for pred in self.init:
+            pred.set_state(self.sim_info)
+
+
     @property
     def solution(self):
         if self._solution is None:
