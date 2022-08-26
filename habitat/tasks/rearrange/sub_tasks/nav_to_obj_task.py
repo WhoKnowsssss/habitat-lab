@@ -114,9 +114,7 @@ class DynNavRLEnv(RearrangeTask):
         robot_entity = self.pddl_problem.get_entity("ROBOT_0")
 
         for entity in self.pddl_problem.all_entities.values():
-            if entity.expr_type.is_subtype_of(
-                self.pddl_problem.expr_types[OBJ_TYPE]
-            ):
+            if entity.expr_type.is_subtype_of(self.pddl_problem.expr_types[OBJ_TYPE]):
                 # The robot could be at this object.
                 new_pred = self.pddl_problem.predicates["robot_at"].clone()
                 new_pred.set_param_values([entity, robot_entity])
@@ -159,9 +157,7 @@ class DynNavRLEnv(RearrangeTask):
         if nav_to_entity is None:
             raise ValueError(f"`obj` argument is necessary in action {action}")
         if not nav_to_entity.expr_type.is_subtype_of(obj_type):
-            raise ValueError(
-                f"Cannot navigate to non obj_type {nav_to_entity}"
-            )
+            raise ValueError(f"Cannot navigate to non obj_type {nav_to_entity}")
 
         return robo_pos, heading_angle, nav_to_entity.name
 
@@ -179,9 +175,7 @@ class DynNavRLEnv(RearrangeTask):
 
         allowed_tasks = self._get_allowed_tasks()
         if len(allowed_tasks) == 0:
-            raise ValueError(
-                "Could not get any allowed tasks as navigation targets."
-            )
+            raise ValueError("Could not get any allowed tasks as navigation targets.")
 
         nav_to_task_name = random.choice(list(allowed_tasks.keys()))
         nav_to_task = random.choice(allowed_tasks[nav_to_task_name])
@@ -240,9 +234,7 @@ class DynNavRLEnv(RearrangeTask):
 
         rearrange_logger.debug(f"Navigating to {nav_to_task}")
 
-        targ_pos, nav_target_angle, nav_to_entity_name = self._get_nav_targ(
-            nav_to_task
-        )
+        targ_pos, nav_target_angle, nav_to_entity_name = self._get_nav_targ(nav_to_task)
         return NavToInfo(
             nav_target_pos=np.array(self._sim.safe_snap_point(targ_pos)),
             nav_target_angle=float(nav_target_angle),
@@ -255,9 +247,7 @@ class DynNavRLEnv(RearrangeTask):
         super().reset(episode, fetch_observations=False)
         rearrange_logger.debug("Resetting navigation task")
 
-        self.pddl_problem.bind_to_instance(
-            self._sim, self._dataset, self, episode
-        )
+        self.pddl_problem.bind_to_instance(self._sim, self._dataset, self, episode)
 
         episode_id = sim.ep_info["episode_id"]
 
@@ -265,13 +255,8 @@ class DynNavRLEnv(RearrangeTask):
         self._nav_to_info = None
 
         if self.force_obj_to_idx is not None:
-            full_key = (
-                f"{episode_id}_{self.force_obj_to_idx}_{self.force_kwargs}"
-            )
-            if (
-                full_key in self.start_states
-                and not self._config.FORCE_REGENERATE
-            ):
+            full_key = f"{episode_id}_{self.force_obj_to_idx}_{self.force_kwargs}"
+            if full_key in self.start_states and not self._config.FORCE_REGENERATE:
                 self._nav_to_info = self.start_states[full_key]
                 rearrange_logger.debug(
                     f"Forcing episode, loaded `{full_key}` from cache {self.cache.cache_id}."
@@ -292,10 +277,7 @@ class DynNavRLEnv(RearrangeTask):
                         f"Forcing episode, saved key `{full_key}` to cache {self.cache.cache_id}."
                     )
         else:
-            if (
-                episode_id in self.start_states
-                and not self._config.FORCE_REGENERATE
-            ):
+            if episode_id in self.start_states and not self._config.FORCE_REGENERATE:
                 self._nav_to_info = self.start_states[episode_id]
 
                 if (
@@ -318,9 +300,7 @@ class DynNavRLEnv(RearrangeTask):
             ):
                 # The object to hold was generated from stale object IDs.
                 # Reselect a new object to hold.
-                self._nav_to_info.start_hold_obj_idx = (
-                    self._generate_snap_to_obj()
-                )
+                self._nav_to_info.start_hold_obj_idx = self._generate_snap_to_obj()
 
             if self._nav_to_info is None:
                 self._nav_to_info = self._generate_nav_start_goal(episode)
@@ -360,14 +340,10 @@ class DynNavRLEnv(RearrangeTask):
         return self._get_observations(episode)
 
 
-def get_robo_start_pos(
-    sim, nav_targ_pos: mn.Vector3
-) -> Tuple[np.ndarray, float]:
+def get_robo_start_pos(sim, nav_targ_pos: mn.Vector3) -> Tuple[np.ndarray, float]:
     orig_state = sim.capture_state()
 
-    start_pos, start_rot = sim.set_robot_base_to_random_point(
-        max_attempts=1000
-    )
+    start_pos, start_rot = sim.set_robot_base_to_random_point(max_attempts=1000)
 
     # Reset everything except for the robot state.
     orig_state["robot_T"] = None
