@@ -19,6 +19,31 @@ BASE_ACTION_NAME = "BASE_VELOCITY"
 
 
 @registry.register_sensor
+class ExecutedOracleNavActionSensor(UsesRobotInterface, Sensor):
+
+    cls_uuid: str = "oracle_nav_executed_action"
+
+    def _get_uuid(self, *args, **kwargs):
+        return ExecutedOracleNavActionSensor.cls_uuid
+
+    def _get_sensor_type(self, *args, **kwargs):
+        return SensorTypes.TENSOR
+
+    def _get_observation_space(self, *args, config, **kwargs):
+        return spaces.Box(
+            shape=(2,),
+            low=np.finfo(np.float32).min,
+            high=np.finfo(np.float32).max,
+            dtype=np.float32,
+        )
+
+    def get_observation(self, task, *args, **kwargs):
+        return np.array(
+            task.actions["ORACLE_NAV_ACTION"].last_action, dtype=np.float32
+        )
+
+
+@registry.register_sensor
 class TargetOrGoalStartPointGoalSensor(UsesRobotInterface, Sensor):
     """
     GPS and compass sensor relative to the starting object position or goal
