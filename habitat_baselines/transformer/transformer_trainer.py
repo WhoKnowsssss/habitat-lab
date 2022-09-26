@@ -67,13 +67,12 @@ from habitat_baselines.transformer.transformer_policy import (
 from habitat_baselines.transformer.dataset import RollingDataset
 from habitat_baselines.utils.common import (
     ObservationBatchingCache,
-    action_array_to_dict,
     batch_obs,
     generate_video,
     get_num_actions,
     is_continuous_action_space,
 )
-from habitat.utils.env_utils import construct_envs
+from habitat_baselines.common.construct_vector_env import construct_envs
 from habitat.utils.render_wrapper import overlay_frame
 
 
@@ -157,6 +156,18 @@ class TransformerTrainer(BaseRLTrainer):
         self.obs_space = observation_space
         self.transformer_policy.to(self.device)
 
+        #TODO: Hack
+        self.config.defrost()
+        self.config.RL.TRANSFORMER.n_layer = 12
+        self.config.RL.TRANSFORMER.context_length = 90
+        self.transformer_policy2 = policy.from_config(
+            self.config, observation_space, self.policy_action_space, 
+        )
+        self.transformer_policy2.to(self.device)
+        self.config.RL.TRANSFORMER.context_length = 30
+        self.config.freeze()
+
+
         if (
             self.config.RL.TRANSFORMER.pretrained_encoder
             or self.config.RL.TRANSFORMER.pretrained
@@ -195,7 +206,6 @@ class TransformerTrainer(BaseRLTrainer):
 
         self.envs = construct_envs(
             config,
-            get_env_class(config.ENV_NAME),
             workers_ignore_signals=is_slurm_batch_job(),
         )
 
@@ -706,18 +716,18 @@ class TransformerTrainer(BaseRLTrainer):
         self._setup_transformer_policy()
 
         # self.transformer_policy.load_state_dict(ckpt_dict["state_dict"])
-        
+        ckpt_dict = self.load_checkpoint(checkpoint_path, map_location="cpu")
         prefix= ''
         if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
             prefix = "module."
-        
+
         self.transformer_policy.load_state_dict(
             {
                 k[k.find(prefix) + len(prefix) :]: v
                 for k, v in ckpt_dict["state_dict"].items()
                 if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
-            , strict=True
+            , strict=False
         )
 
         observations = self.envs.reset()
@@ -790,10 +800,15 @@ class TransformerTrainer(BaseRLTrainer):
 
         name_list = list(range(10,100,10))
         name_list.reverse()
-        name__ = name_list.pop()
+        # name__ = name_list.pop()
+        name__=1010
         gt = torch.load('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__), map_location=torch.device('cpu'))
-        self.gt_actions = gt["actions"]
         self.gt_observations = gt["obs"]
+        self.gt_actions = torch.stack(gt["actions"])[:,:12]
+        if len(self.gt_actions) == len(self.gt_observations):
+            self.gt_actions[:-1,[8,9]] = torch.stack([self.gt_observations[i]['oracle_nav_executed_action'] for i in range(len(self.gt_observations))])[1:]
+        else:
+            self.gt_actions[:,[8,9]] = torch.stack([self.gt_observations[i]['oracle_nav_executed_action'] for i in range(len(self.gt_observations))])[1:]
         self.gt_reward = gt["rewards"]
         self.gt_infos = gt["infos"]
         self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
@@ -803,6 +818,30 @@ class TransformerTrainer(BaseRLTrainer):
         idx22=0
         success_rates = {'overall': 0, 'nav_fail': 0, 'pick_fail': 0}
         temp_list = []
+        switched = False
+        reset_start = False
+        reset_done = False
+
+        def reset_arm(observations, _initial_delta):
+            _target = np.array([-4.5006e-01, -1.0793e+00,  9.9812e-02,  9.3535e-01, -1.0398e-03, 1.5730e+00,  5.0038e-03])
+            current_joint_pos = observations["joint"].cpu().numpy().squeeze()
+            delta = _target - current_joint_pos
+
+            # Dividing by max initial delta means that the action will
+            # always in [-1,1] and has the benefit of reducing the delta
+            # amount was we converge to the target.
+            print(delta)
+            delta = delta / np.maximum(
+                _initial_delta.max(-1), 1e-5
+            )
+
+            action = torch.zeros_like(actions)
+
+            action[..., :7] = torch.from_numpy(
+                delta
+            ).to(device=action.device, dtype=action.dtype)
+
+            return action, np.abs(current_joint_pos - _target).max(-1) < 5e-2
 
         while (
             len(stats_episodes) < number_of_eval_episodes
@@ -810,8 +849,9 @@ class TransformerTrainer(BaseRLTrainer):
         ):
             current_episodes = self.envs.current_episodes()
             with torch.no_grad(): 
-                obs = default_collate(self.gt_observations[:idxxx+1][-30:])
+                obs = default_collate(self.gt_observations[:idx22+1][-30:])
                 obs = {k: obs[k].unsqueeze(1).to(self.device) for k in obs.keys()}
+                # print("\n\nbatch_list", len(batch_list))
                 if idxxx > -1:
                     obs = default_collate(batch_list)
                 logits_loc, logits_arm, logits_pick = self.transformer_policy.act(
@@ -823,11 +863,13 @@ class TransformerTrainer(BaseRLTrainer):
                     valid_context=valid_context,
                 )
             self.gt_actions[idxxx] = torch.clamp(self.gt_actions[idxxx], -1, 1)
-            print(idxxx, self.gt_actions[idxxx][8:10], self.transformer_policy.net.state_encoder.action_normalization(self.gt_actions[idxxx][8:10].cuda()))
-            logits = torch.zeros((1, 11),device=logits_loc.device)
+            print(idxxx)
+            print(logits_pick)
+            logits = torch.zeros((1, 12),device=logits_loc.device)
             # logits[:,:8] = torch.tanh(logits_arm[:,:8])
             logits_picka = torch.argmax(logits_pick,dim=-1)
-            logits[:,7] = logits_picka - 1
+            print('logits_pick', logits_pick)
+            logits[:,7] = logits_picka - 1.1
             # logits[:,7:8][logits[:,7:8]==0] = -1
             # logits[:,[8,9]] = logits_loc[:,:]
             # logits[:,8] = logits_loc == 1
@@ -844,14 +886,37 @@ class TransformerTrainer(BaseRLTrainer):
             # logits[:,8] = boundaries_mean[torch.argmax(logits_loc[:,:9], dim=-1)]
             # logits[:,9] = boundaries_mean[torch.argmax(logits_loc[:,9:], dim=-1)]
             if torch.any(logits[:,:7] != 0.):
-                logits[:,8:10] = 0.
+                logits[:,[8,9]] = 0.
             actions = logits
-            if idxxx < -1:
-                actions = self.gt_actions[idxxx].unsqueeze(0).cuda()
-                if actions.shape[-1] == 12:
-                    actions = torch.cat([actions[:,:10], actions[:,11:]], dim=-1)
-                actions[:,8][torch.abs(actions[:,8]) < 0.5] = 0.
-                actions[:,9][torch.abs(actions[:,9]) < 0.5] = 0.
+            if batch_list[-1]['is_holding'].squeeze() == 1 and not switched: 
+                if not reset_start:
+                    _target = np.array([-4.5006e-01, -1.0793e+00,  9.9812e-02,  9.3535e-01, -1.0398e-03, 1.5730e+00,  5.0038e-03])
+                    current_joint_pos = batch["joint"].cpu().numpy().squeeze()
+                    initial_delta = _target - current_joint_pos
+                    reset_start = True
+                if not reset_done:
+                    actions, reset_done = reset_arm(batch, initial_delta)
+                else:
+                    switched = True
+
+                # else:
+                #     ckpt_dict = self.load_checkpoint('data/ckpts/nav_place_standalone/ckpt.120.pth', map_location="cpu")
+                #     prefix= ''
+                #     if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
+                #         prefix = "module."
+                    
+                #     self.transformer_policy2.load_state_dict(
+                #         {
+                #             k[k.find(prefix) + len(prefix) :]: v
+                #             for k, v in ckpt_dict["state_dict"].items()
+                #             if prefix in k and ("action_distri" not in k) and ("critic" not in k)
+                #         }
+                #         , strict=True
+                #     )
+                #     self.policy_backup = self.transformer_policy
+                #     self.transformer_policy = self.transformer_policy2
+                #     switched = True
+                
 
             # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.1, 0.1, 0.5, 0.9, 1.1]).cuda()
             # temp__ = torch.bucketize(actions[:,[8,9]], boundaries)
@@ -879,21 +944,28 @@ class TransformerTrainer(BaseRLTrainer):
             # in the subprocesses.
             # For backwards compatibility, we also call .item() to convert to
             # an int
-            if actions[0].shape[0] > 1:
+            if is_continuous_action_space(self.policy_action_space):
+                # Clipping actions to the specified limits
                 step_data = [
-                    action_array_to_dict(self.policy_action_space, a)
-                    for a in actions.to(device="cpu")
+                    np.clip(
+                        a.detach().cpu().numpy(),
+                        self.policy_action_space.low,
+                        self.policy_action_space.high,
+                    )
+                    for a in actions
                 ]
             else:
-                step_data = [a.item() for a in actions.to(device="cpu")]
+                step_data = [a.item() for a in actions.cpu()]
+
+            outputs = self.envs.step(step_data)
 
             outputs = self.envs.step(step_data)
 
             if self.split == 'eval' and current_episodes[0].episode_id == self.gt_infos[idxxx]["episode"]:  
-                total__["obs"].append(torch.sum(torch.abs(self.gt_observations[idxxx]["robot_head_rgb"] - observations[0]["robot_head_rgb"])/255).numpy())
+                # total__["obs"].append(torch.sum(torch.abs(self.gt_observations[idxxx]["robot_head_rgb"] - observations[0]["robot_head_rgb"])/255).numpy())
                 total__["actions"].append((self.gt_actions[idxxx].numpy(), actions[0].cpu().numpy()))
                 total__["step"].append(idx22)     
-                idx22 += 1
+            idx22 += 1
 
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
@@ -926,7 +998,6 @@ class TransformerTrainer(BaseRLTrainer):
                 cache=self._obs_batching_cache,
             )
             batch = apply_obs_transforms_batch(batch, self.obs_transforms)
-
             batch_list = batch_list + [batch]
             batch_list = batch_list[-self.config.RL.TRANSFORMER.context_length:]
 
@@ -1024,10 +1095,10 @@ class TransformerTrainer(BaseRLTrainer):
                                 len(stats_episodes)
                             )
 
-                        gt_ = np.array([total__["obs"][i] for i in range(len(total__["gt_dist"]))]).squeeze()
-                        plt.figure()
-                        plt.plot(total__["step"], gt_)
-                        wandb.log({"episode_Obs": plt}, step=len(stats_episodes))
+                        # gt_ = np.array([total__["obs"][i] for i in range(len(total__["gt_dist"]))]).squeeze()
+                        # plt.figure()
+                        # plt.plot(total__["step"], gt_)
+                        # wandb.log({"episode_Obs": plt}, step=len(stats_episodes))
 
                     else:
                         policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
@@ -1093,18 +1164,38 @@ class TransformerTrainer(BaseRLTrainer):
 
                     total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
                     idx22=0
+                    batch_list = [batch]
 
-                    if not next_episodes[i].episode_id in self.gt_episodes:
-                        name__ = name_list.pop()
-                        gt = torch.load('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__), map_location=torch.device('cpu'))
-                        self.gt_actions = gt["actions"]
-                        self.gt_observations = gt["obs"]
-                        self.gt_reward = gt["rewards"]
-                        self.gt_infos = gt["infos"]
-                        self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
-                        self.gt_episodes = list(set(self.gt_episodes))
-                        total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
-                        idxxx=0
+                    if switched:
+                        # ckpt_dict = self.load_checkpoint(checkpoint_path, map_location="cpu")
+                        # prefix= ''
+                        # if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
+                        #     prefix = "module."
+                        
+                        # self.transformer_policy.load_state_dict(
+                        #     {
+                        #         k[k.find(prefix) + len(prefix) :]: v
+                        #         for k, v in ckpt_dict["state_dict"].items()
+                        #         if prefix in k and ("action_distri" not in k) and ("critic" not in k)
+                        #     }
+                        #     , strict=False
+                        # )
+                        # self.transformer_policy = self.policy_backup
+                        switched = False
+                        reset_done = False
+                        reset_start = False
+
+                    # if not next_episodes[i].episode_id in self.gt_episodes:
+                    #     name__ = name_list.pop()
+                    #     gt = torch.load('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__), map_location=torch.device('cpu'))
+                    #     self.gt_actions = gt["actions"]
+                    #     self.gt_observations = gt["obs"]
+                    #     self.gt_reward = gt["rewards"]
+                    #     self.gt_infos = gt["infos"]
+                    #     self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
+                    #     self.gt_episodes = list(set(self.gt_episodes))
+                    #     total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
+                    #     idxxx=0
 
                     if len(self.config.VIDEO_OPTION) > 0:
                         generate_video(
@@ -1140,14 +1231,16 @@ class TransformerTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
+                    logits_pick_prob = torch.softmax(logits_pick, dim=-1)
                     more_infos = dict(obj_start_gps_compass=observations[i]['obj_start_gps_compass'].tolist()[0], 
+                        place_policy = switched, 
                         obj_start_gps_compass_angle=observations[i]['obj_start_gps_compass'].tolist()[1], 
                         obj_goal_gps_compass=observations[i]['obj_goal_gps_compass'].tolist()[0],
                         obj_goal_gps_compass_angle=observations[i]['obj_goal_gps_compass'].tolist()[1],
                         # pick_action0=logits_pick[i,0].item(),
-                        pick_action=logits_pick[i,0].item(),
-                        pick_action1=logits_pick[i,1].item(),
-                        pick_action2=logits_pick[i,2].item(),
+                        pick_action0=logits_pick_prob[i,0].item(),
+                        pick_action1=logits_pick_prob[i,1].item(),
+                        pick_action2=logits_pick_prob[i,2].item(),
                         obj_goal_sensor=np.linalg.norm(observations[i]['obj_goal_sensor']),
                         reward=current_episode_reward[i].item()
                         )

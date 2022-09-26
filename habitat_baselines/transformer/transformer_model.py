@@ -110,7 +110,7 @@ class GPT(nn.Module):
 
         self.model_type = config.model_type
 
-        self.num_inputs = 4
+        self.num_inputs = 3
 
         config.block_size = config.block_size * self.num_inputs
         
@@ -233,22 +233,22 @@ class GPT(nn.Module):
 
         assert states.shape[1] == actions.shape[1] and actions.shape[1] == rtgs.shape[1], "Dimension must match, {}, {}, {}".format(states.shape[1], actions.shape[1], rtgs.shape[1])
 
-        state_inputs = list(torch.split(states,[self.n_embd, self.n_embd//2,self.config.num_states[1]], -1))
+        state_inputs = list(torch.split(states,[self.n_embd//2,self.config.num_states[1]], -1))
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
         # vision_embeddings = vision_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd//2) # (batch, block_size, n_embd)
 
-        for i in range(2, len(state_inputs)):
-            state_inputs[i] = self.state_encoder[i-2](state_inputs[i].type(torch.float32))
+        for i in range(1, len(state_inputs)):
+            state_inputs[i] = self.state_encoder[i-1](state_inputs[i].type(torch.float32))
         
         if actions is not None and self.model_type == 'reward_conditioned': 
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
             actions = torch.clone(actions)
             actions[:,:,:7] = (torch.bucketize(actions[:,:,:7], self.boundaries) - 1) / 10
-            actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
+            # actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
             actions = actions.type(torch.float32)
             # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
-            if actions.shape[-1] == 12:
-                actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
+            # if actions.shape[-1] == 12:
+            #     actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
             token_embeddings = torch.zeros((states.shape[0], self.num_inputs * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
@@ -276,14 +276,14 @@ class GPT(nn.Module):
             # actions[:,:,[8,9]] = (torch.bucketize(actions[:,:,[8,9]], self.boundaries) - 1) / 10
             actions = actions.type(torch.float32)
             # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
-            if actions.shape[-1] == 12:
-                actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
+            # if actions.shape[-1] == 12:
+            #     actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
             token_embeddings = torch.zeros((states.shape[0], (self.num_inputs - 1) * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
 
-            token_embeddings[:,::(self.num_inputs-1),:] = state_inputs[0]
-            token_embeddings[:,1::(self.num_inputs-1),:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
+            # token_embeddings[:,::(self.num_inputs-1),:] = state_inputs[0]
+            token_embeddings[:,::(self.num_inputs-1),:] = torch.cat([state_inputs[0], state_inputs[-1]], dim=-1)
             
             token_embeddings[:,(self.num_inputs-2)::(self.num_inputs-1),:] = action_embeddings
         elif actions is None and self.model_type == 'naive': # only happens at very first timestep of evaluation
@@ -337,9 +337,9 @@ class GPT(nn.Module):
             # logits_loc = logits_loc.view(*logits_loc.shape[:2], 2, 11)
 
             # loss1 = self.focal_loss_loc(logits_loc[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:])
-            accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:,:], dim=-1) == temp_target[:,:,:]) / np.prod(temp_target[:,:,:].shape)
+            # accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:,:], dim=-1) == temp_target[:,:,:]) / np.prod(temp_target[:,:,:].shape)
 
-            # loss1 = F.mse_loss(logits_loc, temp_target, reduction='none')
+            loss1 = F.mse_loss(logits_loc, temp_target)
 
             temp_target = torch.bucketize(targets[:,:,:7], self.boundaries) - 1
             logits_arm = logits_arm.view(*logits_arm.shape[:2], 7, 11)
@@ -359,11 +359,12 @@ class GPT(nn.Module):
 
             # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,:,7]), (1-0.2) * (targets[:,:,7] >= 0).to(torch.float32) + 0.2 * 0.5)
             loss3 = F.cross_entropy(logits_pick.permute(0,2,1), torch.round(targets[:,:,7]).long() + 1, label_smoothing=0.1)
+            accuracy3 = torch.sum(torch.argmax(logits_pick[:,:,:], dim=-1) == torch.round(targets[:,:,7]).long() + 1) / np.prod(targets[:,:,7].shape)
             loss_dict = {
                 "locomotion": loss1.detach().item(), 
                 "arm": loss2.detach().item(), 
                 "pick": loss3.detach().item(), 
-                "accuracy_loc": accuracy1.detach().item(),
+                "accuracy_pick": accuracy3.detach().item(),
                 "accuracy_arm": accuracy2.detach().item()} #, "phase": loss4.detach().item()
             loss1 = torch.exp(-self.loss_vars[0]) * loss1 + self.loss_vars[0]
             loss2 = torch.exp(-self.loss_vars[1]) * loss2 + self.loss_vars[1]

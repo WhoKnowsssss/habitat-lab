@@ -112,7 +112,7 @@ class WeightsAndBiasesWriter:
             )
 
         self.run = wandb.init(
-            settings=wandb.Settings(start_method='thread'),
+            settings=wandb.Settings(start_method='fork'),
             config={"slurm": slurm_info_dict, **config}, **wb_kwargs
         )
 

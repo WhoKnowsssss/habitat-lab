@@ -41,6 +41,7 @@ class RobotManager:
 
         for agent_name in cfg.AGENTS:
             agent_cfg = cfg[agent_name]
+            print(agent_cfg)
             robot_cls = eval(agent_cfg.ROBOT_TYPE)
             robot = robot_cls(agent_cfg.ROBOT_URDF, sim)
             grasp_mgr = RearrangeGraspManager(sim, cfg, robot)

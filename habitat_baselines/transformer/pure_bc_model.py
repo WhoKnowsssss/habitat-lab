@@ -21,7 +21,7 @@ class LSTMBC(nn.Module):
 
         self.model_type = config.model_type
 
-        self.num_inputs = 4
+        self.num_inputs = 3
 
         config.block_size = config.block_size * self.num_inputs
         
@@ -144,31 +144,28 @@ class LSTMBC(nn.Module):
 
         assert states.shape[1] == actions.shape[1] and actions.shape[1] == rtgs.shape[1], "Dimension must match, {}, {}, {}".format(states.shape[1], actions.shape[1], rtgs.shape[1])
 
-        state_inputs = list(torch.split(states,[self.n_embd, self.n_embd//2,self.config.num_states[1]], -1))
+        state_inputs = list(torch.split(states,[self.n_embd//2,self.config.num_states[1]], -1))
         # vision_embeddings = self.vision_encoder(visual_input.reshape(-1, 1, 128, 128).type(torch.float32).contiguous())
         # vision_embeddings = vision_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd//2) # (batch, block_size, n_embd)
 
-        for i in range(2, len(state_inputs)):
-            state_inputs[i] = self.state_encoder[i-2](state_inputs[i].type(torch.float32))
+        for i in range(1, len(state_inputs)):
+            state_inputs[i] = self.state_encoder[i-1](state_inputs[i].type(torch.float32))
         
-        if actions is not None and self.model_type == 'reward_conditioned': 
-            rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
+        if actions is not None and self.model_type == 'bc': 
+            actions = torch.clone(actions)
             actions[:,:,:7] = (torch.bucketize(actions[:,:,:7], self.boundaries) - 1) / 10
             actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
+            # actions[:,:,[8,9]] = (torch.bucketize(actions[:,:,[8,9]], self.boundaries) - 1) / 10
             actions = actions.type(torch.float32)
             # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
-            if actions.shape[-1] == 12:
-                actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
+            # if actions.shape[-1] == 12:
+            #     actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
-            token_embeddings = torch.zeros((states.shape[0], (self.num_inputs -1) * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
-            
-            # token_embeddings[:,::self.num_inputs,:] = rtg_embeddings
+            token_embeddings = torch.zeros((states.shape[0], (self.num_inputs - 1) * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
 
-            # for i in range(len(state_inputs)):
-            #     token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
-            token_embeddings[:,::(self.num_inputs-1),:] = state_inputs[0]
-            token_embeddings[:,1::(self.num_inputs-1),:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
+            # token_embeddings[:,::(self.num_inputs-1),:] = state_inputs[0]
+            token_embeddings[:,::(self.num_inputs-1),:] = torch.cat([state_inputs[0], state_inputs[-1]], dim=-1)
             
             token_embeddings[:,(self.num_inputs-2)::(self.num_inputs-1),:] = action_embeddings
 
@@ -176,7 +173,7 @@ class LSTMBC(nn.Module):
             
         x = self.ln_f(x)
 
-        if actions is not None and self.model_type == 'reward_conditioned':
+        if actions is not None and self.model_type == 'bc':
             logits_loc = self.head(x[:, (self.num_inputs-3)::(self.num_inputs-1), :]) # only keep predictions from state_embeddings
             logits_arm = self.head_2(x[:, (self.num_inputs-3)::(self.num_inputs-1), :])
             logits_pick = self.head_3(x[:, (self.num_inputs-3)::(self.num_inputs-1), :])
@@ -193,29 +190,33 @@ class LSTMBC(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         loss_dict = None
-        # a = (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1))
-        # print(a[0])
-        # logits_loc = torch.argmax(logits_loc,dim=-1)
-        # print(logits_loc[0])
         if targets is not None:
             # loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.05)
             
             # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
             # temp_target = torch.bucketize(targets[:,:,[8,9]], boundaries) - 1
             # loss1 = F.cross_entropy(logits_loc[:,:,:9].permute(0,2,1), temp_target[:,:,0], label_smoothing=0.05) + F.cross_entropy(logits_loc[:,:,9:].permute(0,2,1), temp_target[:,:,1], label_smoothing=0.05)
-            targets[:,:,[8,9]] = self.action_normalization(targets[:,:,[8,9]])
-            loss1 = F.mse_loss(logits_loc, targets[:,:,[8,9]], reduction='none')
+            temp_target = self.action_normalization(targets[:,:,[8,9]])
+            # temp_target = torch.bucketize(targets[:,:,[8,9]], self.boundaries) - 1
+
+            # logits_loc = logits_loc.view(*logits_loc.shape[:2], 2, 11)
+
+            # loss1 = self.focal_loss_loc(logits_loc[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:])
+            # accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:,:], dim=-1) == temp_target[:,:,:]) / np.prod(temp_target[:,:,:].shape)
+
+            loss1 = F.mse_loss(logits_loc, temp_target)
 
             temp_target = torch.bucketize(targets[:,:,:7], self.boundaries) - 1
             logits_arm = logits_arm.view(*logits_arm.shape[:2], 7, 11)
             # loss2 = F.cross_entropy(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7], label_smoothing=0.00)
             loss2 = self.focal_loss(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7])
+            accuracy2 = torch.sum(torch.argmax(logits_arm[:,:,:,:], dim=-1) == temp_target[:,:,:7]) / np.prod(temp_target[:,:,:7].shape)
             # loss2 = F.mse_loss(torch.tanh(logits_arm[:,:,:8]), targets[:,:,:8], reduction='none')
             # mask1 = torch.all(targets[:,:,[8,9]] == 0, dim=-1)
             # mask2 = torch.all(targets[:,:,:7] == 0, dim=-1)
             # loss1[~mask2] = 0.
             # loss2[~mask1] = 0.
-            loss1 = torch.mean(loss1)
+            # loss1 = torch.mean(loss1)
             # loss2 = torch.mean(loss2)
 
             # temp_target = mask1 + 2 * mask2 - 1
@@ -223,7 +224,12 @@ class LSTMBC(nn.Module):
 
             # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,:,7]), (1-0.2) * (targets[:,:,7] >= 0).to(torch.float32) + 0.2 * 0.5)
             loss3 = F.cross_entropy(logits_pick.permute(0,2,1), torch.round(targets[:,:,7]).long() + 1, label_smoothing=0.1)
-            loss_dict = {"locomotion": loss1.detach().item(), "arm": loss2.detach().item(), "pick": loss3.detach().item()} #, "phase": loss4.detach().item()
+            loss_dict = {
+                "locomotion": loss1.detach().item(), 
+                "arm": loss2.detach().item(), 
+                "pick": loss3.detach().item(), 
+                # "accuracy_loc": accuracy1.detach().item(),
+                "accuracy_arm": accuracy2.detach().item()} #, "phase": loss4.detach().item()
             loss1 = torch.exp(-self.loss_vars[0]) * loss1 + self.loss_vars[0]
             loss2 = torch.exp(-self.loss_vars[1]) * loss2 + self.loss_vars[1]
             loss3 = torch.exp(-self.loss_vars[2]) * loss3 + self.loss_vars[2]

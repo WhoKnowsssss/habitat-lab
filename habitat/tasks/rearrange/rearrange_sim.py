@@ -61,7 +61,6 @@ class RearrangeSim(HabitatSim):
             config.AGENT_0.SENSORS = all_new_sensor_names
             config.freeze()
         super().__init__(config)
-
         self.first_setup = True
         self.ep_info: Optional[Config] = None
         self.prev_loaded_navmesh = None
@@ -283,8 +282,11 @@ class RearrangeSim(HabitatSim):
                 start_pos = pos[:3]
                 start_rot = pos[3]
             
+            # start_pos =  np.array([-1.0050111,   0.15225519, -3.7352433])
+            # start_rot =   0.328446
             robot.base_pos = start_pos
             robot.base_rot = start_rot
+            
             self.perform_discrete_collision_detection()
             did_collide, details = rearrange_collision(
                 self, True, ignore_base=False, agent_idx=agent_idx

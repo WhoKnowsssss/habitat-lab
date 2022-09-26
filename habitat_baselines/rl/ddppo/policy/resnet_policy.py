@@ -120,13 +120,14 @@ class ResNetEncoder(nn.Module):
         self.depth_keys = [k for k in observation_space.spaces if "depth" in k]
 
         # Count total # of channels for rgb and for depth
+        print(observation_space.spaces)
         self._n_input_rgb, self._n_input_depth = [
             # sum() returns 0 for an empty list
             sum(observation_space.spaces[k].shape[2] for k in keys)
             for keys in [self.rgb_keys, self.depth_keys]
         ]
 
-        if normalize_visual_inputs:
+        if False: #normalize_visual_inputs
             self.running_mean_and_var: nn.Module = RunningMeanAndVar(
                 self._n_input_depth + self._n_input_rgb
             )

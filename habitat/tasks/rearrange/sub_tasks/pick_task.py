@@ -82,7 +82,7 @@ class RearrangePickTaskV1(RearrangeTask):
             snap_pos = targ_pos
 
         orig_start_pos = sim.safe_snap_point(snap_pos)
-
+        
         state = sim.capture_state()
         start_pos = orig_start_pos
 

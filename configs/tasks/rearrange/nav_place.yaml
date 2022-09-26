@@ -2,6 +2,8 @@ GYM:
     AUTO_NAME: "NavPlace"
     OBS_KEYS:
     - robot_head_depth
+    - robot_third_rgb
+    # - robot_head_rgb
     - relative_resting_position
     - obj_start_sensor
     - obj_goal_sensor
@@ -119,6 +121,8 @@ SIMULATOR:
         RADIUS: 0.3
         SENSORS:
         - HEAD_DEPTH_SENSOR
+        - HEAD_RGB_SENSOR
+        - THIRD_RGB_SENSOR
         START_POSITION:
         - 0
         - 0
@@ -149,11 +153,14 @@ SIMULATOR:
     ARM_RGB_SENSOR:
         HEIGHT: 128
         WIDTH: 128
+    THIRD_RGB_SENSOR:
+        WIDTH: 512
+        HEIGHT: 512
     CTRL_FREQ: 120.0
     DEFAULT_AGENT_ID: 0
     FORWARD_STEP_SIZE: 0.25
     HABITAT_SIM_V0:
-        ALLOW_SLIDING: false
+        ALLOW_SLIDING: true
         ENABLE_PHYSICS: true
         GPU_DEVICE_ID: 0
         GPU_GPU: false

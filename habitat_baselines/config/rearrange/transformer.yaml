@@ -6,17 +6,19 @@ SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
 VIDEO_OPTION: ["disk"]
 TENSORBOARD_DIR: "tb"
-VIDEO_DIR: "video_dir/nav_pick_nav_place_varysize_np_2"
+VIDEO_DIR: "video_dir/npnp_2_dataset4"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
+VIDEO_RENDER_VIEWS:
+  - "THIRD_RGB_SENSOR"
+SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR", 'THIRD_RGB_SENSOR']
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_5k_np" #nav_pick_nav_place_nn_2
+EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_2_dataset3" #nav_pick_nav_place_nn_2
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
-SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR"]
-CHECKPOINT_FOLDER: "data/ckpts/npnp_5k_np_discrete"
+CHECKPOINT_FOLDER: "data/ckpts/npnp_2_dataset4"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
 LOG_INTERVAL: 1
@@ -26,6 +28,7 @@ FORCE_TORCH_SINGLE_THREADED: True
 EVAL_KEYS_TO_INCLUDE_IN_NAME: ['success'] #'reward', 'force', 
 EVAL:
   SPLIT: "eval"
+  USE_CKPT_CONFIG: True
 
 RL:
   POLICY:
@@ -41,18 +44,18 @@ RL:
   GYM_OBS_KEYS: ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint', 'is_holding'] #
 
   TRAJECTORY_DATASET:
-    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_06_20_5k"
+    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_09_23_combine"
     files_per_load: 1
     steps_to_reload: 5000
     trajs_per_file: 10
 
 
   TRANSFORMER:
-    lr: 1.0E-6
+    lr: 1.0E-5
     eps: 1.0E-5
     grad_norm_clip: 0.5
     use_linear_lr_decay: True
-    batch_size: 80 # 100
+    batch_size: 130
     num_workers: 2
 
 
@@ -61,12 +64,12 @@ RL:
     return_to_go: 100
     
     num_mini_batch: 2
-    context_length: 90
+    context_length: 30
     max_episode_step: 500
     # model_type: "reward_conditioned"
     model_type: "bc"
     n_head: 8
-    n_layer: 12
+    n_layer: 6
     use_linear_clip_decay: False
     reward_window_size: 50
 
@@ -100,5 +103,5 @@ WB:
   PROJECT_NAME: "habitat"
   ENTITY: "haytham-huang"
   RUN_NAME: "npnp_debug"
-  GROUP: "nav_pick_nav_place_5k"
+  GROUP: "nav_pick_nav_place_combine"
 

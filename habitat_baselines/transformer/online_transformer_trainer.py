@@ -55,13 +55,12 @@ from habitat_baselines.transformer.transformer_policy import (
 )
 from habitat_baselines.utils.common import (
     ObservationBatchingCache,
-    action_array_to_dict,
     batch_obs,
     generate_video,
     get_num_actions,
     is_continuous_action_space,
 )
-from habitat.utils.env_utils import construct_envs
+from habitat_baselines.common.construct_vector_env import construct_envs
 from habitat.utils.render_wrapper import overlay_frame
 
 
@@ -183,7 +182,6 @@ class OnlineTransformerTrainer(BaseRLTrainer):
 
         self.envs = construct_envs(
             config,
-            get_env_class(config.ENV_NAME),
             workers_ignore_signals=is_slurm_batch_job(),
         )
 

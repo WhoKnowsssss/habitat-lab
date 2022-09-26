@@ -35,16 +35,17 @@ def _get_gym_name(cfg: Config) -> Optional[str]:
 
 
 def _get_env_name(cfg: Config) -> Optional[str]:
-    return cfg["ENV_TASK"]
+    return cfg["ENV_NAME"]
 
 
 def make_gym_from_config(config: Config) -> HabRenderWrapper:
     """
     From a habitat-lab or habitat-baseline config, create the associated gym environment.
     """
+    env_class_name = _get_env_name(config)
     if "TASK_CONFIG" in config:
         config = config.TASK_CONFIG
-    env_class_name = _get_env_name(config)
+    env_class_name = "RLTaskEnv"
     env_class = get_env_class(env_class_name)
     assert (
         env_class is not None
