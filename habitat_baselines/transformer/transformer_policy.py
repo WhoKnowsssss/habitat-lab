@@ -118,8 +118,11 @@ class TransformerResNetPolicy(nn.Module, Policy):
         deterministic=False
     ):
         self.net.eval()
+        # valid_context is a b-dimensional integer array, where b is the batch size, that tells how many steps in the observations and previous actions
+        # are from the current episode. The min is 1 (one step of history only) and the max is context_length (the maximum length of history) as in yaml file. 
         logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
-        logits = list(l[range(l.shape[0]), valid_context-1] for l in logits)
+        # logits are locomotion, arm, gripper, stop, and value function accordingly. stop is not trained yet. (now it's rule-based)
+        logits = list(l[range(l.shape[0]), valid_context-1] for l in logits) 
 
         if deterministic:
             # if torch.argmax(logits_pick, dim=-1)==1:
@@ -170,7 +173,7 @@ class TransformerResNetPolicy(nn.Module, Policy):
     ):
         self.net.eval()
         logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
-        logits = (l[range(l.shape[0]), valid_context-1] for l in logits)
+        logits = list(l[range(l.shape[0]), valid_context-1] for l in logits)
         return logits[-1]
 
     def evaluate_actions(
@@ -185,9 +188,11 @@ class TransformerResNetPolicy(nn.Module, Policy):
     ):
         self.net.eval()
         logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
-        logits = (l[range(l.shape[0]), valid_context-1] for l in logits)
+        logits = list(l[range(l.shape[0]), valid_context-1] for l in logits) 
         
-        distribution = ActionDistribution(self.action_space, "tanh", logits, self.std)
+        value = logits[-1]
+        logits = torch.cat([logits[1], logits[2], logits[0]], dim=-1)
+        distribution = ActionDistribution(self.action_space, "tanh", logits, self.std.unsqueeze(0).expand(logits.shape[0], -1))
         
         sampled_action = torch.zeros((logits.shape[0], 10), dtype=torch.float32)
         sampled_action[:,:7] = torch.bucketize(action[:,:7], self.boundaries) - 1
