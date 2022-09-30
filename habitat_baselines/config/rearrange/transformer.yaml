@@ -63,19 +63,12 @@ RL:
 
 
     return_to_go: 100
-    
-    num_mini_batch: 2
     context_length: 30
     max_episode_step: 500
     # model_type: "reward_conditioned"
     model_type: "bc"
     n_head: 8
     n_layer: 6
-    use_linear_clip_decay: False
-    reward_window_size: 50
-
-    use_normalized_advantage: False
-
     hidden_size: 512
 
     # Use double buffered sampling, typically helps
