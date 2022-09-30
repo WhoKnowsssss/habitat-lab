@@ -29,7 +29,7 @@ from habitat_baselines.rl.ppo.policy import Policy
 from habitat_baselines.transformer.transformer_model import GPTConfig, GPT
 from habitat_baselines.transformer.pure_bc_model import LSTMBC
 from habitat_baselines.common.baseline_registry import baseline_registry
-from habitat_baselines.utils.common import get_num_actions
+from habitat_baselines.utils.common import get_num_actions, ActionDistribution
 
 
 @baseline_registry.register_policy
@@ -54,20 +54,8 @@ class TransformerResNetPolicy(nn.Module, Policy):
     ):
         super().__init__()
         self.context_length = context_length
-        
-        if policy_config is not None:
-            discrete_actions = (
-                policy_config.action_distribution_type == "categorical"
-            )
-            self.action_distribution_type = (
-                policy_config.action_distribution_type
-            )
-            include_visual_keys = policy_config.include_visual_keys
-        else:
-            discrete_actions = True
-            self.action_distribution_type = "categorical"
-            include_visual_keys = None
 
+        include_visual_keys = policy_config.include_visual_keys
         self.net = TransformerResnetNet(
             observation_space=observation_space,
             action_space=action_space,  # for previous action
@@ -81,10 +69,20 @@ class TransformerResNetPolicy(nn.Module, Policy):
             resnet_baseplanes=resnet_baseplanes,
             normalize_visual_inputs=normalize_visual_inputs,
             force_blind_policy=force_blind_policy,
-            discrete_actions=discrete_actions,
+            discrete_actions=False,
             fuse_keys=fuse_keys,
             include_visual_keys=include_visual_keys
         )
+
+        self.action_space = spaces.Dict({
+            "arm": spaces.Dict({k: spaces.Discrete(11) for k in range(7)}),
+            "gripper": spaces.Discrete(3),
+            "locomotion": spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32), 
+            })
+        self.boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0])
+        self.boundaries = torch.tensor([-1.1, -0.9, -0.7, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1])
+
+        self.std = torch.nn.Parameter(0.1 * torch.ones(2, dtype=torch.float32))
 
     @classmethod
     def from_config(
@@ -117,18 +115,101 @@ class TransformerResNetPolicy(nn.Module, Policy):
         rtgs=None, 
         timesteps=None,
         valid_context=None,
+        deterministic=False
     ):
         self.net.eval()
         logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
+        logits = list(l[range(l.shape[0]), valid_context-1] for l in logits)
 
-        # logits = logits[range(logits.shape[0]), valid_context-1]
-        # l1, l2 = logits
-        # l1 = l1[range(l1.shape[0]), valid_context-1]
-        # l2 = l2[range(l2.shape[0]), valid_context-1]
-        # logits = (l1,l2)
+        if deterministic:
+            # if torch.argmax(logits_pick, dim=-1)==1:
+            #     pick_constant = -1
+            # elif torch.argmax(logits_pick, dim=-1)==2:
+            #     pick_constant = 1
+
+            # logits[:,7] = pick_constant
+            # logits[:,8:10] = logits_loc
+            # logits_arm = logits_arm.view(logits_arm.shape[0], 7, 11)
+            # boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
+            # logits[:,:7] = boundaries_mean[torch.argmax(logits_arm, dim=-1)]
+            # if torch.any(torch.abs(logits[:,:7]) >= 0.5):
+            #     logits[:,[8,9]] = 0.
+            # actions = logits
+            return logits[:-1]
+
+        value = logits[-1]
+        logits = torch.cat([logits[1], logits[2], logits[0]], dim=-1)
+        distribution = ActionDistribution(self.action_space, "tanh", logits, self.std.unsqueeze(0).expand(logits.shape[0], -1))
+        
+        sampled_action = distribution.sample()
+        action = torch.zeros((logits.shape[0], 12), dtype=torch.float32)
+        action[:,:7] = self.boundaries_mean[sampled_action[:,:7].to(torch.long)]
+        action[:,7] = (sampled_action[:,7] == 1).int() + 2*(sampled_action[:,7] == 0).int() + 3*(sampled_action[:,7] == 2).int() - 2
+        action[:,8:10] = sampled_action[:,8:10]
+        mask = torch.any(torch.abs(logits[:,:7]) >= 0.5, dim=-1)
+        action[mask,8:10] = 0
+
+        action_log_probs = distribution.log_probs(sampled_action)
+        rnn_hidden_states = None
+
+        return (
+            value,
+            action,
+            action_log_probs,
+            rnn_hidden_states,
+        )
+
+    def get_value(
+        self,
+        observations,
+        prev_actions=None,
+        targets=None, 
+        rtgs=None, 
+        timesteps=None,
+        valid_context=None,
+    ):
+        self.net.eval()
+        logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
         logits = (l[range(l.shape[0]), valid_context-1] for l in logits)
-        return logits
+        return logits[-1]
 
+    def evaluate_actions(
+        self,
+        observations,
+        action,
+        prev_actions=None,
+        targets=None, 
+        rtgs=None, 
+        timesteps=None,
+        valid_context=None,
+    ):
+        self.net.eval()
+        logits, _, _ = self.net(observations, prev_actions=prev_actions, targets=targets, rtgs=rtgs, timesteps=timesteps, current_context=valid_context)
+        logits = (l[range(l.shape[0]), valid_context-1] for l in logits)
+        
+        distribution = ActionDistribution(self.action_space, "tanh", logits, self.std)
+        
+        sampled_action = torch.zeros((logits.shape[0], 10), dtype=torch.float32)
+        sampled_action[:,:7] = torch.bucketize(action[:,:7], self.boundaries) - 1
+        sampled_action[:,7] = (action[:,7] == 0).int() + 2*(sampled_action[:,7] == -1).int() + 3*(sampled_action[:,7] == 1).int() - 1
+        sampled_action[:,8:10] = action[:,8:10]
+
+        value = logits[-1]
+
+        action_log_probs = distribution.log_probs(sampled_action)
+        distribution_entropy = distribution.entropy()
+
+        rnn_hidden_states = None
+        aux_loss_res = None
+
+        return (
+            value,
+            action_log_probs,
+            distribution_entropy,
+            rnn_hidden_states,
+            aux_loss_res,
+        )
+    
     def forward(
         self,
         states, 
@@ -302,7 +383,7 @@ class TransformerResnetNet(Net):
         else:
             use_obs_space = observation_space
             
-        # self.visual_encoder_depth = ResNetEncoder(
+        # self.visual_encoder_rgb = ResNetEncoder(
         #     use_obs_space,
         #     baseplanes=resnet_baseplanes,
         #     ngroups=resnet_baseplanes // 2,
@@ -332,13 +413,13 @@ class TransformerResnetNet(Net):
         )
 
         if not self.visual_encoder.is_blind:
-            self.visual_fc_depth = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(
-                    np.prod(self.visual_encoder.output_shape), hidden_size
-                ),
-                nn.ReLU(True),
-            )
+            # self.visual_fc_rgb = nn.Sequential(
+            #     nn.Flatten(),
+            #     nn.Linear(
+            #         np.prod(self.visual_encoder.output_shape), hidden_size//2
+            #     ),
+            #     nn.ReLU(True),
+            # )
             self.visual_fc = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(
@@ -381,24 +462,19 @@ class TransformerResnetNet(Net):
             if "visual_features" in observations:
                 visual_feats = observations["visual_features"]
             else:
-                # visual_feats = self.visual_encoder_depth(observations)
-                # visual_feats = self.visual_fc_depth(visual_feats)
+                # visual_feats = self.visual_encoder_rgb(observations)
+                # visual_feats = self.visual_fc_rgb(visual_feats)
                 # x.append(visual_feats)
                 visual_feats = self.visual_encoder(observations)
                 visual_feats = self.visual_fc(visual_feats)
                 x.append(visual_feats)
-                # visual_feats = self.visual_encoder_depth(observations)
-                # visual_feats = self.visual_fc_depth(visual_feats)
+                # visual_feats = self.visual_encoder_rgb(observations)
+                # visual_feats = self.visual_fc_rgb(visual_feats)
                 # x.append(visual_feats)
 
         if self._fuse_keys is not None:
-            # observations['obj_start_gps_compass'] = torch.stack([observations['obj_start_gps_compass'][:,0], torch.cos(-observations['obj_start_gps_compass'][:,1]), torch.sin(-observations['obj_start_gps_compass'][:,1])]).permute(1,0)
-            # observations['obj_goal_gps_compass'] = torch.stack([observations['obj_goal_gps_compass'][:,0], torch.cos(-observations['obj_goal_gps_compass'][:,1]), torch.sin(-observations['obj_goal_gps_compass'][:,1])]).permute(1,0)
             observations['obj_start_gps_compass'] = torch.stack([observations['obj_start_gps_compass'][:,0], torch.cos(observations['obj_start_gps_compass'][:,1]), torch.sin(observations['obj_start_gps_compass'][:,1])]).permute(1,0)
             observations['obj_goal_gps_compass'] = torch.stack([observations['obj_goal_gps_compass'][:,0], torch.cos(observations['obj_goal_gps_compass'][:,1]), torch.sin(observations['obj_goal_gps_compass'][:,1])]).permute(1,0)
-            # observations['obj_start_gps_compass'][:,1] *= -1
-            # observations['obj_goal_gps_compass'][:,1] *= -1
-            
             fuse_states = torch.cat(
                 [observations[k] for k in self._fuse_keys], dim=-1
             )
@@ -485,28 +561,11 @@ class TransformerResnetNet(Net):
             goal_output = self.goal_visual_encoder({"rgb": goal_image})
             x.append(self.goal_visual_fc(goal_output))
 
-        # if self.discrete_actions:
-        #     prev_actions = prev_actions.squeeze(-1)
-        #     start_token = torch.zeros_like(prev_actions)
-        #     prev_actions = self.prev_action_embedding(
-        #         torch.where(masks.view(-1), prev_actions + 1, start_token)
-        #     )
-        # else:
-        #     prev_actions = self.prev_action_embedding(
-        #         masks * prev_actions.float()
-        #     )
-
         outs = torch.cat(x, dim=1)
         outs = outs.reshape(B, -1, *outs.shape[1:])
 
         assert (outs.shape[1] <= self.context_length), "Input Dimension Error"
         assert ((targets is not None) != (current_context is not None)), "Training or Evaluating? "
-        # if outs.shape[1] < self.context_length and (current_context is not None):
-        #     outs = torch.cat((torch.zeros((outs.shape[0], self.context_length - outs.shape[1], outs.shape[2]), device=outs.device), outs), dim=1)
-        # if prev_actions.shape[1] < self.context_length and (current_context is not None):
-        #     prev_actions = torch.cat((torch.zeros((prev_actions.shape[0], self.context_length - prev_actions.shape[1], prev_actions.shape[2]), device=prev_actions.device), prev_actions), dim=1)
-        # if rtgs.shape[1] < self.context_length and (current_context is not None):
-        #     rtgs = torch.cat((torch.zeros((rtgs.shape[0], self.context_length - rtgs.shape[1], rtgs.shape[2]), device=rtgs.device), rtgs), dim=1)
 
         # Move valid state-action-reward pair to the left
         if current_context is not None:
