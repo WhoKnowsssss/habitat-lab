@@ -26,7 +26,7 @@ def read_dataset(
     stepwise_returns = []
 
     path = config.trajectory_dir
-
+    
     filenames = os.listdir(path)
     # filenames = ['{}.pt'.format(i*10) for i in range(1,51)]
 
@@ -50,6 +50,11 @@ def read_dataset(
                 )
             )
         file = os.path.join(path, filenames[buffer_num])
+        try:
+            file = os.readlink(file)
+            print('symbol link', file)
+        except Exception as e:
+            print(file)
         if os.path.exists(file):
             dataset_raw = torch.load(file, map_location=torch.device('cpu'))
 
@@ -64,6 +69,7 @@ def read_dataset(
             else:
                 temp_actions[:,[8,9]] = np.stack([temp_obs[i]['oracle_nav_executed_action'] for i in range(len(temp_obs))])[1:]
                 temp_obs = temp_obs[:-1]
+            temp_actions[:,11] = 0
             #==================== Only Arm Action Phase ===================
             # stepwise_idx = np.argwhere(np.all(temp_actions[:,8:10] == 0, axis=-1) & temp_dones == True).squeeze()
 
@@ -73,22 +79,22 @@ def read_dataset(
             # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Pick ====================
-            if int(filenames[buffer_num][:-3]) <= 1000:
-                temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
-                temp_start_idxs = np.roll(temp_done_idxs, 1)
-                temp_start_idxs[0] = 0
-                temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
-                temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
-                temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
-                temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
-                temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
-                stepwise_idx = np.concatenate([np.arange(temp_nav_phase[i] + 1 , temp_done_idxs[i]) for i in range(temp_nav_phase.shape[0])])
+            # if int(filenames[buffer_num][:-3]) <= 50000:
+            #     temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
+            #     temp_start_idxs = np.roll(temp_done_idxs, 1)
+            #     temp_start_idxs[0] = 0
+            #     temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
+            #     temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
+            #     temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
+            #     temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
+            #     temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
+            #     stepwise_idx = np.concatenate([np.arange(temp_nav_phase[i] + 1 , temp_done_idxs[i]) for i in range(temp_nav_phase.shape[0])])
                 
-                temp_dones[temp_nav_phase] = False
-                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
-                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
-                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
-                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+            #     temp_dones[temp_nav_phase] = False
+            #     temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+            #     temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+            #     temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+            #     temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Place ====================
             # temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
@@ -148,8 +154,34 @@ def read_dataset(
             # temp_actions[stepwise_idx, 7] = 0
             
             temp_actions[:,7] = (temp_actions[:,7] >= 0).astype(np.int64)
-            if int(filenames[buffer_num][:-3]) <= 1000:
-                temp_actions[:,7][temp_actions[:,7] == 0] -= 1
+            temp_actions[:,10] = 0
+            temp_pick_action = np.stack([temp_obs[i]['is_holding'] for i in range(len(temp_obs))])
+            change = temp_pick_action[1:-1] - temp_pick_action[:-2]
+            # if int(filenames[buffer_num][:-3]) > 50000:
+            #     ii = np.where(change < 0)[0]
+            #     ii = [np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii]
+            #     ii = np.concatenate(ii)
+            #     temp_actions[ii,10] = 1
+            # else:
+            #     ii = np.where(change > 0)[0]
+            #     ii = [np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii]
+            #     ii = np.concatenate(ii)
+            #     temp_actions[ii,10] = 2
+            ii = np.where(change < 0)[0]
+            ii = np.concatenate([np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii])
+            temp_actions[ii,10] = 1
+            ii = np.where(change > 0)[0]
+            ii = np.concatenate([np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii])
+            temp_actions[ii,10] = 2
+
+            #==================== Add Noise ========================
+            for i in range(len(temp_obs)):
+                for k in temp_obs[i].keys():
+                    temp_obs[i][k] += np.random.randn(*temp_obs[i][k].shape).astype(np.float32) * 0.05
+
+            #==================== Simple Filtering =================
+            mask = np.all(temp_actions[:,:7] == 0, axis=-1)
+            temp_actions[~mask,8:10] = 0
 
             #========================================================
             l = temp_done_idxs[1:] - temp_done_idxs[:-1]

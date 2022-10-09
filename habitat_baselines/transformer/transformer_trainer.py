@@ -4,6 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from builtins import breakpoint
 import contextlib
 import os
 import random
@@ -210,12 +211,12 @@ class TransformerTrainer(BaseRLTrainer):
         )
 
     def _init_train(self):
-        resume_state = load_resume_state(self.config)
-        if resume_state is not None:
-            self.config: Config = resume_state["config"]
-            self.using_velocity_ctrl = (
-                self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
-            ) == ["VELOCITY_CONTROL"]
+        # resume_state = load_resume_state(self.config)
+        # if resume_state is not None:
+        #     self.config: Config = resume_state["config"]
+        #     self.using_velocity_ctrl = (
+        #         self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
+        #     ) == ["VELOCITY_CONTROL"]
 
         # if self.config.RL.DDPPO.force_distributed:
         #     self._is_distributed = True
@@ -553,36 +554,36 @@ class TransformerTrainer(BaseRLTrainer):
             after_scheduler=lr_scheduler_after
         )
 
-        resume_state = load_resume_state(self.config)
-        if resume_state is not None:
-            prefix = ""
-            self.transformer_policy.load_state_dict(
-                {
-                    k[k.find(prefix) + len(prefix) :]: v
-                    for k, v in resume_state["state_dict"].items()
-                    if prefix in k
-                }
-            )
-            # self.transformer_policy.load_state_dict(resume_state["state_dict"])
-            self.optimizer.load_state_dict(resume_state["optim_state"])
-            lr_scheduler_after.load_state_dict(resume_state["lr_sched_state"])
-            lr_scheduler.total_epoch = 0
+        # resume_state = load_resume_state(self.config)
+        # if resume_state is not None:
+        #     prefix = ""
+        #     breakpoint()
+        #     self.transformer_policy.load_state_dict(
+        #         {
+        #             k[k.find(prefix) + len(prefix) :]: v
+        #             for k, v in resume_state["state_dict"].items()
+        #             if prefix in k
+        #         }
+        #     )
+        #     self.optimizer.load_state_dict(resume_state["optim_state"])
+        #     lr_scheduler_after.load_state_dict(resume_state["lr_sched_state"])
+        #     lr_scheduler.total_epoch = 0
 
-            # requeue_stats = resume_state["requeue_stats"]
-            # self.env_time = requeue_stats["env_time"]
-            # self.pth_time = requeue_stats["pth_time"]
-            # self.num_steps_done = requeue_stats["num_steps_done"]
-            # self.num_updates_done = requeue_stats["num_updates_done"]
-            # self._last_checkpoint_percent = requeue_stats[
-            #     "_last_checkpoint_percent"
-            # ]
-            # count_checkpoints = requeue_stats["count_checkpoints"]
-            # prev_time = requeue_stats["prev_time"]
+        # requeue_stats = resume_state["requeue_stats"]
+        # self.env_time = requeue_stats["env_time"]
+        # self.pth_time = requeue_stats["pth_time"]
+        # self.num_steps_done = requeue_stats["num_steps_done"]
+        # self.num_updates_done = requeue_stats["num_updates_done"]
+        # self._last_checkpoint_percent = requeue_stats[
+        #     "_last_checkpoint_percent"
+        # ]
+        # count_checkpoints = requeue_stats["count_checkpoints"]
+        # prev_time = requeue_stats["prev_time"]
 
-            # self.running_episode_stats = requeue_stats["running_episode_stats"]
-            # self.window_episode_stats.update(
-            #     requeue_stats["window_episode_stats"]
-            # )
+        # self.running_episode_stats = requeue_stats["running_episode_stats"]
+        # self.window_episode_stats.update(
+        #     requeue_stats["window_episode_stats"]
+        # )
 
         with (
             get_writer(self.config, flush_secs=self.flush_secs)
@@ -801,8 +802,12 @@ class TransformerTrainer(BaseRLTrainer):
         name_list = list(range(10,100,10))
         name_list.reverse()
         # name__ = name_list.pop()
-        name__=1010
-        gt = torch.load('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__), map_location=torch.device('cpu'))
+        name__=50010
+        try:
+            f = os.readlink('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__))
+        except:
+            f = '{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__)
+        gt = torch.load(f, map_location=torch.device('cpu'))
         self.gt_observations = gt["obs"]
         self.gt_actions = torch.stack(gt["actions"])[:,:12]
         if len(self.gt_actions) == len(self.gt_observations):
@@ -820,9 +825,10 @@ class TransformerTrainer(BaseRLTrainer):
         temp_list = []
         switched = False
         reset_start = False
-        reset_done = False
+        reset_done = 0
+        pick_constant = 0
 
-        def reset_arm(observations, _initial_delta):
+        def reset_arm(observations, _initial_delta, reset_done):
             _target = np.array([-4.5006e-01, -1.0793e+00,  9.9812e-02,  9.3535e-01, -1.0398e-03, 1.5730e+00,  5.0038e-03])
             current_joint_pos = observations["joint"].cpu().numpy().squeeze()
             delta = _target - current_joint_pos
@@ -830,10 +836,10 @@ class TransformerTrainer(BaseRLTrainer):
             # Dividing by max initial delta means that the action will
             # always in [-1,1] and has the benefit of reducing the delta
             # amount was we converge to the target.
-            print(delta)
-            delta = delta / np.maximum(
-                _initial_delta.max(-1), 1e-5
-            )
+            # print(delta)
+            # delta = delta / np.maximum(
+            #     _initial_delta.max(-1), 1e-5
+            # )
 
             action = torch.zeros_like(actions)
 
@@ -841,62 +847,116 @@ class TransformerTrainer(BaseRLTrainer):
                 delta
             ).to(device=action.device, dtype=action.dtype)
 
-            return action, np.abs(current_joint_pos - _target).max(-1) < 5e-2
+            if np.abs(current_joint_pos - _target).max(-1) < 5e-2:
+                reset_done += 1
+                action[..., :7] = 0
 
+            return action, reset_done
+
+        self.gt_actions = torch.clamp(self.gt_actions, -1, 1)
         while (
             len(stats_episodes) < number_of_eval_episodes
             and self.envs.num_envs > 0
         ):
             current_episodes = self.envs.current_episodes()
             with torch.no_grad(): 
-                obs = default_collate(self.gt_observations[:idx22+1][-30:])
-                obs = {k: obs[k].unsqueeze(1).to(self.device) for k in obs.keys()}
+                obs2 = default_collate(self.gt_observations[:idx22 + 1][-30:]) #idx22
+                obs2 = {k: obs2[k].unsqueeze(1).to(self.device) for k in obs2.keys()}
+                # for k in ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint']:
+                #     obs[k] = torch.clone(obs[k]) + torch.zeros_like(obs[k]).uniform_(-0.2,0.2)
                 # print("\n\nbatch_list", len(batch_list))
                 if idxxx > -1:
                     obs = default_collate(batch_list)
-                logits_loc, logits_arm, logits_pick = self.transformer_policy.act(
+                else:
+                    obs = obs2
+                # for k in ['obj_goal_sensor', 'obj_goal_gps_compass']: #
+                #     obs[k] = obs2[k]
+                # print({k: obs[k][-1] - obs2[k][-1] })
+                # for k in ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint', 'is_holding']:
+                #     obs[k] = obs2[k]
+                    # print(k, obs[k][-1], obs2[k][-1])
+                
+                # prev_actions[:,-1,9] = 1
+                logits_loc, logits_arm, logits_pick, logits_stop = self.transformer_policy.act(
                     {k: obs[k].transpose(1,0) for k in obs.keys()},
                     prev_actions=prev_actions[:,-len(batch_list):,:],
+                    # prev_actions=self.gt_actions[:idx22+1][-30:].unsqueeze(0).cuda(),
                     targets=None, 
                     rtgs=rtgs[:,-len(batch_list):,:], 
                     timesteps=timesteps,
                     valid_context=valid_context,
+                    deterministic=True
                 )
-            self.gt_actions[idxxx] = torch.clamp(self.gt_actions[idxxx], -1, 1)
-            print(idxxx)
-            print(logits_pick)
+            # print(idxxx)
             logits = torch.zeros((1, 12),device=logits_loc.device)
             # logits[:,:8] = torch.tanh(logits_arm[:,:8])
-            logits_picka = torch.argmax(logits_pick,dim=-1)
-            print('logits_pick', logits_pick)
-            logits[:,7] = logits_picka - 1.1
+            
+            logits_pick[:,[1,2]] *= 1.5
+            if torch.argmax(logits_pick, dim=-1)==1:
+                pick_constant = -1
+            elif torch.argmax(logits_pick, dim=-1)==2:
+                pick_constant = 1
+            elif idx22 < 5:
+                pick_constant = 0
+
+            # if pick_constant == -1 and batch['is_holding'][0] == 1:
+            try:
+                if idx22 > 0 and infos[0]['object_to_goal_distance0'] < 0.3:
+                    logits[:,11] = 1
+            except Exception as e:
+                print(e)
+                pass
+
+            logits[:,7] = pick_constant
+
             # logits[:,7:8][logits[:,7:8]==0] = -1
             # logits[:,[8,9]] = logits_loc[:,:]
             # logits[:,8] = logits_loc == 1
             # logits[:,9] = logits_loc - 1
             # logits[:,9:-1][logits[:,9:-1]==2] = 0
             # logits[:,:8] = 0.
-            # boundaries = torch.tensor([-1.1, -0.9, -0.7, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1]).cuda()
-            logits_arm = logits_arm.view(logits_arm.shape[0], 7, 11)
-            logits[:,8:10] = logits_loc
+            # boundaries_mean = torch.tensor([-1.0, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 1.0]).cuda()
+            
+            # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
+            # temp_target = torch.bucketize(self.gt_actions[idxxx][[8,9]].cuda(), boundaries).unsqueeze(0) - 1
+            # accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:], dim=-1) == temp_target[:,:]) / 2
+
             # logits_loc = logits_loc.view(logits_loc.shape[0], 2, 11)
+            # boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
+            # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
+            # print(torch.softmax(logits_loc, dim=-1))
+            logits[:,8:10] = logits_loc
+            # logits[:,8:10] = self.gt_actions[idx22][8:10]
+            logits_arm = logits_arm.view(logits_arm.shape[0], 7, 11)
             boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
+            # boundaries_mean = torch.tensor([-0.9071 , -0.6149 , -0.43435, -0.27925, -0.13655,  0.     ,0.13655,  0.27925,  0.43435,  0.6149 ,  0.9071 ]).cuda()
+            temp_list.append(np.concatenate([torch.softmax(logits_arm[0,5], dim=0).cpu().numpy(), boundaries_mean[torch.argmax(logits_arm, dim=-1)][0,5:6].cpu().numpy()]))
             logits[:,:7] = boundaries_mean[torch.argmax(logits_arm, dim=-1)]
+
+            # logits[:,:7] = torch.tanh(logits_arm[:,:7])
             # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
             # logits[:,8] = boundaries_mean[torch.argmax(logits_loc[:,:9], dim=-1)]
             # logits[:,9] = boundaries_mean[torch.argmax(logits_loc[:,9:], dim=-1)]
-            if torch.any(logits[:,:7] != 0.):
+            
+            if torch.any(torch.abs(logits[:,:7]) >= 0.1):
                 logits[:,[8,9]] = 0.
             actions = logits
+            # if idx22 < 30:
+            #     actions[:,:11] = self.gt_actions[idx22,:11]
             if batch_list[-1]['is_holding'].squeeze() == 1 and not switched: 
                 if not reset_start:
                     _target = np.array([-4.5006e-01, -1.0793e+00,  9.9812e-02,  9.3535e-01, -1.0398e-03, 1.5730e+00,  5.0038e-03])
                     current_joint_pos = batch["joint"].cpu().numpy().squeeze()
                     initial_delta = _target - current_joint_pos
                     reset_start = True
-                if not reset_done:
-                    actions, reset_done = reset_arm(batch, initial_delta)
+                if not reset_done >= 1:
+                    actions, reset_done = reset_arm(batch, initial_delta, reset_done)
+                elif not reset_done >= 100:
+                    actions[:,:7] = 0
+                    actions[:,8:10] = logits_loc
+                    reset_done += 1
                 else:
+                    valid_context[:] = 1
                     switched = True
 
                 # else:
@@ -935,9 +995,6 @@ class TransformerTrainer(BaseRLTrainer):
             # loss2 = F.mse_loss(logits_arm[:,:7], actions[:,:7])
             # loss3 = F.binary_cross_entropy(torch.sigmoid(logits_arm[:,7]), (actions[:,7] >= 0).to(torch.float32))
 
-            # temp_list.append([loss1.item(), loss2.item(),loss3.item()])
-            temp_list.append([0,0,0])
-
             prev_actions = torch.cat((prev_actions[:,1:,:], actions.unsqueeze(1)), dim=1)  # type: ignore
             # NB: Move actions to CPU.  If CUDA tensors are
             # sent in to env.step(), that will create CUDA contexts
@@ -959,8 +1016,6 @@ class TransformerTrainer(BaseRLTrainer):
 
             outputs = self.envs.step(step_data)
 
-            outputs = self.envs.step(step_data)
-
             if self.split == 'eval' and current_episodes[0].episode_id == self.gt_infos[idxxx]["episode"]:  
                 # total__["obs"].append(torch.sum(torch.abs(self.gt_observations[idxxx]["robot_head_rgb"] - observations[0]["robot_head_rgb"])/255).numpy())
                 total__["actions"].append((self.gt_actions[idxxx].numpy(), actions[0].cpu().numpy()))
@@ -970,9 +1025,7 @@ class TransformerTrainer(BaseRLTrainer):
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
-            
-            print(idxxx)
-            
+                        
             if torch.all(actions[0][8:10] == 0):
                 total__["pick_reward"] += rewards_l[0]
             else:
@@ -997,8 +1050,9 @@ class TransformerTrainer(BaseRLTrainer):
                 device=self.device,
                 cache=self._obs_batching_cache,
             )
+            # batch['robot_head_depth'] = obs['robot_head_depth'][-1]
             batch = apply_obs_transforms_batch(batch, self.obs_transforms)
-            batch_list = batch_list + [batch]
+            batch_list.append(batch)
             batch_list = batch_list[-self.config.RL.TRANSFORMER.context_length:]
 
             not_done_masks = torch.tensor(
@@ -1048,11 +1102,6 @@ class TransformerTrainer(BaseRLTrainer):
                     valid_context[i] = 1
                     timesteps[i,0,0] = 0
                     rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
-
-                    temp_list = np.array(temp_list)
-                    print("Average Loss: ", np.average(temp_list, axis=0))
-                    print("MAX Loss: ", np.max(temp_list, axis=0))
-                    temp_list = []
 
 
                     if self.split == 'eval':
@@ -1165,8 +1214,20 @@ class TransformerTrainer(BaseRLTrainer):
                     total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
                     idx22=0
                     batch_list = [batch]
+                    prev_actions[:] = 0
+
+                    temp_list = np.array(temp_list)
+                    
+                    for nd in range(11):
+                        plt.plot(temp_list[:,nd], label=f"{nd}")
+                    plt.plot(temp_list[:,-1], 'ro', label="actual_action")
+                    plt.legend()
+                    plt.savefig(self.config.VIDEO_DIR + '/{}_'.format(len(stats_episodes)) + current_episodes[i].episode_id + '.png')
+
+                    temp_list = []
 
                     if switched:
+                        pass
                         # ckpt_dict = self.load_checkpoint(checkpoint_path, map_location="cpu")
                         # prefix= ''
                         # if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
@@ -1181,9 +1242,10 @@ class TransformerTrainer(BaseRLTrainer):
                         #     , strict=False
                         # )
                         # self.transformer_policy = self.policy_backup
-                        switched = False
-                        reset_done = False
-                        reset_start = False
+                    switched = False
+                    reset_done = 0
+                    reset_start = False
+                    pick_constant = 0
 
                     # if not next_episodes[i].episode_id in self.gt_episodes:
                     #     name__ = name_list.pop()
@@ -1195,14 +1257,14 @@ class TransformerTrainer(BaseRLTrainer):
                     #     self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
                     #     self.gt_episodes = list(set(self.gt_episodes))
                     #     total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
-                    #     idxxx=0
+                    idxxx=0
 
                     if len(self.config.VIDEO_OPTION) > 0:
                         generate_video(
                             video_option=self.config.VIDEO_OPTION,
                             video_dir=self.config.VIDEO_DIR,
                             images=rgb_frames[i],
-                            episode_id=current_episodes[i].episode_id + "_{}".format(len(stats_episodes)),
+                            episode_id="{}_".format(len(stats_episodes)) + current_episodes[i].episode_id,
                             checkpoint_idx=checkpoint_index,
                             metrics=self._extract_scalars_from_info(infos[i]),
                             tb_writer=writer,
@@ -1223,6 +1285,9 @@ class TransformerTrainer(BaseRLTrainer):
                     for k, v in aggregated_stats.items():
                         logger.info(f"Average episode {k}: {v:.4f}")
 
+                    if len(stats_episodes) == 50:
+                        raise Exception
+
                     
 
                 # episode continues
@@ -1232,7 +1297,9 @@ class TransformerTrainer(BaseRLTrainer):
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
                     logits_pick_prob = torch.softmax(logits_pick, dim=-1)
-                    more_infos = dict(obj_start_gps_compass=observations[i]['obj_start_gps_compass'].tolist()[0], 
+                    logits_place_prob = torch.softmax(logits_stop, dim=-1)
+                    more_infos = dict(
+                        obj_start_gps_compass=observations[i]['obj_start_gps_compass'].tolist()[0], 
                         place_policy = switched, 
                         obj_start_gps_compass_angle=observations[i]['obj_start_gps_compass'].tolist()[1], 
                         obj_goal_gps_compass=observations[i]['obj_goal_gps_compass'].tolist()[0],
@@ -1241,8 +1308,9 @@ class TransformerTrainer(BaseRLTrainer):
                         pick_action0=logits_pick_prob[i,0].item(),
                         pick_action1=logits_pick_prob[i,1].item(),
                         pick_action2=logits_pick_prob[i,2].item(),
+                        pick_action=pick_constant,
                         obj_goal_sensor=np.linalg.norm(observations[i]['obj_goal_sensor']),
-                        reward=current_episode_reward[i].item()
+                        reward=current_episode_reward[i].item(),
                         )
 
                     more_infos.update(infos[i])

@@ -136,10 +136,10 @@ class GPT(nn.Module):
         self.head_4 = nn.Linear(config.n_embd, 2, bias=False)
         self.head_value = nn.Linear(config.n_embd, 1, bias=False)
         self.focal_loss = FocalLoss(
-            alpha=torch.tensor([0.05,0.0125,0.0125,0.0125,0.0125,0.8,0.0125,0.0125,0.0125,0.0125,0.05]), gamma=5).cuda()
+            alpha=(1-torch.tensor([0.05,0.0125,0.0125,0.0125,0.0125,0.8,0.0125,0.0125,0.0125,0.0125,0.05])), gamma=5).cuda()
         self.focal_loss_loc = FocalLoss(gamma=5).cuda()
         self.focal_loss_pick = FocalLoss(
-            alpha=torch.tensor([0.8,0.1,0.1]), gamma=5).cuda()
+            alpha=(1-torch.tensor([0.8,0.1,0.1])), gamma=5).cuda()
 
         self.action_normalization = ActionNorm(mean=torch.tensor([0.4667095,  0.00209379]), std=torch.tensor([0.61708325, 0.9862876])).cuda()
         
@@ -248,7 +248,8 @@ class GPT(nn.Module):
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
             actions = torch.clone(actions)
             actions[:,:,:7] = (torch.bucketize(actions[:,:,:7], self.boundaries) - 1) / 10
-            # actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
+            actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
+            actions[:,:,[10, 11]] = 0
             actions = actions.type(torch.float32)
             # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
             # if actions.shape[-1] == 12:
@@ -261,8 +262,9 @@ class GPT(nn.Module):
 
             # for i in range(len(state_inputs)):
             #     token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
-            token_embeddings[:,1::self.num_inputs,:] = state_inputs[0]
-            token_embeddings[:,2::self.num_inputs,:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
+            # token_embeddings[:,1::self.num_inputs,:] = state_inputs[0]
+            # token_embeddings[:,2::self.num_inputs,:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
+            token_embeddings[:,1::self.num_inputs,:] = torch.cat([state_inputs[0], state_inputs[-1]], dim=-1)
             
             token_embeddings[:,(self.num_inputs-1)::self.num_inputs,:] = action_embeddings
         
@@ -277,11 +279,10 @@ class GPT(nn.Module):
             actions = torch.clone(actions)
             actions[:,:,:7] = (torch.bucketize(actions[:,:,:7], self.boundaries) - 1) / 10
             actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
+            actions[:,:,[10, 11]] = 0
+            # actions[:,:,[11]] = 1
             # actions[:,:,[8,9]] = (torch.bucketize(actions[:,:,[8,9]], self.boundaries) - 1) / 10
             actions = actions.type(torch.float32)
-            # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
-            # if actions.shape[-1] == 12:
-            #     actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(actions) # (batch, block_size, n_embd)
 
             token_embeddings = torch.zeros((states.shape[0], (self.num_inputs - 1) * states.shape[1], self.config.n_embd), dtype=torch.float32, device=action_embeddings.device)
@@ -334,14 +335,11 @@ class GPT(nn.Module):
         if targets is not None:
             # loss1 = F.cross_entropy(logits_loc.permute(0,2,1), (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1)), label_smoothing=0.05)
             
-            # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
-            # temp_target = torch.bucketize(targets[:,:,[8,9]], boundaries) - 1
             # loss1 = F.cross_entropy(logits_loc[:,:,:9].permute(0,2,1), temp_target[:,:,0], label_smoothing=0.05) + F.cross_entropy(logits_loc[:,:,9:].permute(0,2,1), temp_target[:,:,1], label_smoothing=0.05)
             temp_target = self.action_normalization(targets[:,:,[8,9]])
+            
             # temp_target = torch.bucketize(targets[:,:,[8,9]], self.boundaries) - 1
-
             # logits_loc = logits_loc.view(*logits_loc.shape[:2], 2, 11)
-
             # loss1 = self.focal_loss_loc(logits_loc[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:])
             # accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:,:], dim=-1) == temp_target[:,:,:]) / np.prod(temp_target[:,:,:].shape)
 
@@ -352,6 +350,7 @@ class GPT(nn.Module):
             # loss2 = F.cross_entropy(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7], label_smoothing=0.00)
             loss2 = self.focal_loss(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7])
             accuracy2 = torch.sum(torch.argmax(logits_arm[:,:,:,:], dim=-1) == temp_target[:,:,:7]) / np.prod(temp_target[:,:,:7].shape)
+            accuracy_armstart = (torch.sum(torch.any(torch.argmax(logits_arm[:,:,:,:], dim=-1) != 5)) + 1e-5) / (torch.sum(torch.any(temp_target[:,:,:7] != 5)) + 1e-5)
             # targets[:,:,:8][torch.abs(targets[:,:,:8]) < 0.2] = 0
             # loss2 = F.mse_loss(torch.tanh(logits_arm[:,:,:8]), targets[:,:,:8])
             # mask1 = torch.all(targets[:,:,[8,9]] == 0, dim=-1)
@@ -380,6 +379,7 @@ class GPT(nn.Module):
                 "accuracy_pick": accuracy3.detach().item(),
                 "accuracy_arm": accuracy2.detach().item(),
                 # "accuracy_place": accuracy4.detach().item(),
+                "accuracy_idle": accuracy_armstart.detach().item(),
                 } #, "phase": loss4.detach().item()
             loss1 = torch.exp(-self.loss_vars[0]) * loss1 + self.loss_vars[0]
             loss2 = torch.exp(-self.loss_vars[1]) * loss2 + self.loss_vars[1]

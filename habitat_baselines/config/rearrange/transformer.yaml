@@ -1,12 +1,12 @@
 VERBOSE: False
-BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_place.yaml
+BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/nav_pick_nav_place.yaml
 TRAINER_NAME: "transformer"
 ENV_NAME: "RearrangeRLEnv"
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
 VIDEO_OPTION: ["disk"]
 TENSORBOARD_DIR: "tb"
-VIDEO_DIR: "video_dir/npnp_5k_new"
+VIDEO_DIR: "video_dir/npnp_5k_seq_eval"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
@@ -14,11 +14,11 @@ VIDEO_RENDER_VIEWS:
   - "THIRD_RGB_SENSOR"
 SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR", 'THIRD_RGB_SENSOR']
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_5k_new" #nav_pick_nav_place_nn_2
+EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_5k_new_seq" #nav_pick_nav_place_nn_2
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
-CHECKPOINT_FOLDER: "data/ckpts/npnp_5k_new_seq"
+CHECKPOINT_FOLDER: "data/ckpts/npnp_25k_seq"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
 LOG_INTERVAL: 1
@@ -44,8 +44,8 @@ RL:
   GYM_OBS_KEYS: ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint', 'is_holding'] #
 
   TRAJECTORY_DATASET:
-    # trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_09_28_combine"
-    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_09_28_5k"
+    trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_10_01_combine"
+    # trajectory_dir: "/srv/share/xhuang394/share_demos/nav_pick_nav_place_10_01_50k_all"
     files_per_load: 1
     steps_to_reload: 5000
     trajs_per_file: 10
@@ -56,7 +56,7 @@ RL:
     eps: 1.0E-5
     grad_norm_clip: 0.5
     use_linear_lr_decay: True
-    batch_size: 160
+    batch_size: 100
     num_workers: 2
 
 
@@ -80,9 +80,9 @@ RL:
     # The PyTorch distributed backend to use
     distrib_backend: NCCL
     # Visual encoder backbone
-    pretrained_weights: "data/ckpts/npnp_nn_10k_2/16.pth" #
+    pretrained_weights: "data/ckpts/npnp_25k_new/ckpt.43.pth" #
     # Initialize with pretrained weights
-    pretrained: False
+    pretrained: True
     # Initialize just the visual encoder backbone with pretrained weights
     pretrained_encoder: False
     # Whether or not the visual encoder backbone will be trained.

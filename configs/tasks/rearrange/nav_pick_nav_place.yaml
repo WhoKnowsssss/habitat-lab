@@ -12,10 +12,11 @@ GYM:
     - joint
     - is_holding
 ENVIRONMENT:
-    MAX_EPISODE_STEPS: 2000
+    MAX_EPISODE_STEPS: 1500
 DATASET:
     TYPE: RearrangeDataset-v0
     SPLIT: train
+    # DATA_PATH: data/datasets/replica_cad/rearrange/v1/eval/all_receptacles_10k_1k.json.gz
     DATA_PATH: data/datasets/replica_cad/rearrange/v1/train/all_receptacles_10k_1k.json.gz
     SCENES_DIR: data/replica_cad/
 TASK:
@@ -29,7 +30,7 @@ TASK:
     COUNT_ROBOT_OBJ_COLLS: false
     CONSTRAINT_VIOLATION_ENDS_EPISODE: false
     BASE_ANGLE_NOISE: 0.15
-    BASE_NOISE: 0.00
+    BASE_NOISE: 0.05
     EASY_INIT: false
     TASK_SPEC_BASE_PATH: configs/tasks/rearrange/pddl/
     TASK_SPEC: nav_pick_nav_place
@@ -70,7 +71,7 @@ TASK:
             ARM_CONTROLLER: ArmRelPosAction
             GRIP_CONTROLLER: MagicGraspAction
             ARM_JOINT_DIMENSIONALITY: 7
-            GRASP_THRESH_DIST: 0.3
+            GRASP_THRESH_DIST: 0.15
             DISABLE_GRIP: false
             DELTA_POS_LIMIT: 0.0125
             EE_CTRL_LIM: 0.015
