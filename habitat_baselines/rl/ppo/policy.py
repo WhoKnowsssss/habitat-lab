@@ -28,6 +28,7 @@ from habitat_baselines.utils.common import (
     get_num_action_logits,
     get_num_actions,
 )
+from habitat_baselines.rl.transformer_policy.action_distribution import MixedDistributionNet #Should be moved elsewhere
 
 
 class Policy(abc.ABC):
@@ -70,35 +71,22 @@ class Policy(abc.ABC):
 class NetPolicy(nn.Module, Policy):
     action_distribution: ActionDistributionNet
 
-    def __init__(self, aux_loss_config, net, action_space, policy_config=None):
+    def __init__(
+        self, net, action_space, policy_config=None, aux_loss_config=None
+    ):
         super().__init__()
         self.net = net
+        self.dim_actions = get_num_actions(action_space)
         self.action_distribution: Union[CategoricalNet, GaussianNet]
 
-        # if policy_config is None:
-        #     self.action_distribution_type = "categorical"
-        # else:
-        #     self.action_distribution_type = (
-        #         policy_config.action_distribution_type
-        #     )
+        if policy_config is None:
+            self.action_distribution_type = "categorical"
+        else:
+            self.action_distribution_type = (
+                policy_config.action_distribution_type
+            )
 
-        # if self.action_distribution_type == "categorical":
-        #     self.action_distribution = CategoricalNet(
-        #         self.net.output_size, self.dim_actions
-        #     )
-        # elif self.action_distribution_type == "gaussian":
-        #     self.action_distribution = GaussianNet(
-        #         self.net.output_size,
-        #         self.dim_actions,
-        #         policy_config.ACTION_DIST,
-        #     )
-        # else:
-        #     ValueError(
-        #         f"Action distribution {self.action_distribution_type}"
-        #         "not supported."
-        #     )
-
-        # self.critic = CriticHead(self.net.output_size)
+        self.critic = CriticHead(self.net.output_size)
 
         if self.action_distribution_type == "categorical":
             self.dim_actions = action_space.n
@@ -112,6 +100,11 @@ class NetPolicy(nn.Module, Policy):
             self.action_distribution = GaussianNet(
                 self.net.output_size,
                 self.dim_actions,
+                policy_config.ACTION_DIST,
+            )
+        elif self.action_distribution_type == "mixed":
+            self.action_distribution = MixedDistributionNet(
+                self.net.output_size,
                 policy_config.ACTION_DIST,
             )
         else:

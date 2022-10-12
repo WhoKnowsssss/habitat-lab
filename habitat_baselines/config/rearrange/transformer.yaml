@@ -6,7 +6,7 @@ SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
 VIDEO_OPTION: ["disk"]
 TENSORBOARD_DIR: "tb"
-VIDEO_DIR: "video_dir/npnp_5k_seq_eval"
+VIDEO_DIR: "video_dir/npnp_25k_train"
 VIDEO_FPS: 30
 VIDEO_RENDER_TOP_DOWN: False
 VIDEO_RENDER_ALL_INFO: True
@@ -14,11 +14,11 @@ VIDEO_RENDER_VIEWS:
   - "THIRD_RGB_SENSOR"
 SENSORS: ["HEAD_DEPTH_SENSOR", "HEAD_RGB_SENSOR", 'THIRD_RGB_SENSOR']
 TEST_EPISODE_COUNT: -1
-EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_5k_new_seq" #nav_pick_nav_place_nn_2
+EVAL_CKPT_PATH_DIR: "data/ckpts/npnp_25k_new" #nav_pick_nav_place_nn_2
 NUM_ENVIRONMENTS: 1
 WRITER_TYPE: 'wb'
 # Visual sensors to include
-CHECKPOINT_FOLDER: "data/ckpts/npnp_25k_seq"
+CHECKPOINT_FOLDER: "data/ckpts/npnp_25k_seq_offline"
 NUM_UPDATES: -1
 TOTAL_NUM_STEPS: 1.0e8
 LOG_INTERVAL: 1
@@ -33,7 +33,10 @@ EVAL:
 RL:
   POLICY:
       name: "TransformerResNetPolicy"
-      action_distribution_type: "gaussian"
+      action_distribution_type: "mixed"
+      ACTION_DIST:
+        discrete_arm: true
+        discrete_base: false
       include_visual_keys: ["robot_head_depth", "robot_head_rgb"] # "robot_head_depth", robot_head_rgb
       
 
@@ -80,9 +83,9 @@ RL:
     # The PyTorch distributed backend to use
     distrib_backend: NCCL
     # Visual encoder backbone
-    pretrained_weights: "data/ckpts/npnp_25k_new/ckpt.43.pth" #
+    pretrained_weights: "data/ckpts/npnp_25k_seq/ckpt.40.pth" #
     # Initialize with pretrained weights
-    pretrained: True
+    pretrained: False
     # Initialize just the visual encoder backbone with pretrained weights
     pretrained_encoder: False
     # Whether or not the visual encoder backbone will be trained.
@@ -96,6 +99,6 @@ RL:
 WB:
   PROJECT_NAME: "habitat"
   ENTITY: "haytham-huang"
-  RUN_NAME: "npnp_debug"
+  RUN_NAME: "npnp_25k"
   GROUP: "nav_pick_nav_place_combine_full"
 

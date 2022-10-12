@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from gym import spaces
 from torch import device, nn as nn
-import torch.nn.functional as F
 import numpy as np
 
 from habitat.config import Config
@@ -30,7 +29,6 @@ from habitat_baselines.rl.transformer_policy.transformer_model import (
     GPTConfig,
     GPT,
 )
-from habitat_baselines.transformer.pure_bc_model import LSTMBC
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.utils.common import get_num_actions
 from habitat_baselines.rl.transformer_policy.action_distribution import (
@@ -38,8 +36,6 @@ from habitat_baselines.rl.transformer_policy.action_distribution import (
 )
 from habitat_baselines.rl.ppo import NetPolicy
 from habitat_baselines.common.tensor_dict import TensorDict
-
-from .focal_loss import FocalLoss
 
 
 @baseline_registry.register_policy
@@ -84,27 +80,6 @@ class TransformerResNetPolicy(NetPolicy):
             action_space=action_space,
             policy_config=policy_config,
         )
-        self.boundaries_mean = torch.tensor(
-            [-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]
-        ).cuda()
-        self.boundaries = torch.tensor(
-            [-1.1, -0.9, -0.7, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1]
-        ).cuda()
-        self.loss_vars = nn.parameter.Parameter(torch.zeros((3,)))
-        self.focal_loss = FocalLoss(
-            alpha=(1-torch.tensor([0.05,0.0125,0.0125,0.0125,0.0125,0.8,0.0125,0.0125,0.0125,0.0125,0.05])), gamma=5).cuda()
-        self.focal_loss_loc = FocalLoss(gamma=5).cuda()
-        self.focal_loss_pick = FocalLoss(
-            alpha=(1-torch.tensor([0.8,0.1,0.1])), gamma=5).cuda()
-
-        if self.action_distribution_type == "categorical":
-            self.len_logit = [11*7, 3, 11*2]
-        elif self.action_distribution_type == "gaussian":
-            self.len_logit = [7, 1, 2]
-        elif self.action_distribution_type == "mixed":
-            self.len_logit = [11*7, 3, 2]
-        else:
-            raise NotImplementedError
 
     @classmethod
     def from_config(
@@ -129,68 +104,6 @@ class TransformerResNetPolicy(NetPolicy):
             fuse_keys=config.TASK_CONFIG.GYM.OBS_KEYS,
         )
 
-    def forward(
-        self,
-        states, 
-        actions, 
-        targets, 
-        rtgs,
-        timesteps,
-    ):
-        features = self.net(states, None, actions, None, rtgs=rtgs, offline_training=True)
-        # if we are given some desired targets also calculate the loss
-        loss = None
-        loss_dict = None
-
-        if self.action_distribution_type == "categorical":
-            distribution = self.action_distribution(features)
-            logits = distribution.probs
-        elif self.action_distribution_type == "gaussian":
-            distribution = self.action_distribution(features)
-            logits = distribution.mean
-        elif self.action_distribution_type == "mixed":
-            logits = self.action_distribution(features, return_logits=True)
-        else:
-            raise NotImplementedError
-
-        #======================== separate logits ==========================
-        logits_arm, logits_pick, logits_loc = torch.split(logits, self.len_logit, -1)
-        
-        #=========================== locomotion ============================
-        temp_target = targets[:,:,8:10]
-        loss1 = F.mse_loss(logits_loc, temp_target)
-
-        #=========================== arm action ============================
-        temp_target = torch.bucketize(targets[:,:,:7], self.boundaries) - 1
-        logits_arm = logits_arm.view(*logits_arm.shape[:2], 7, 11)
-        loss2 = self.focal_loss(logits_arm[:,:,:,:].permute(0,3,1,2), temp_target[:,:,:7])
-        accuracy2 = torch.sum(torch.argmax(logits_arm[:,:,:,:], dim=-1) == temp_target[:,:,:7]) / np.prod(temp_target[:,:,:7].shape)
-
-        #========================= gripper action ==========================
-        loss3 = self.focal_loss_pick(logits_pick.permute(0,2,1), targets[:,:,10].long())
-        accuracy3 = torch.sum(torch.argmax(logits_pick[:,:,:], dim=-1) == targets[:,:,10].long()) / np.prod(targets[:,:,10].shape)
-
-        #========================== stop action ============================
-        # loss4 = F.cross_entropy(logits_stop.permute(0,2,1), targets[:,:,10].long(), label_smoothing=0.05)
-        # accuracy4 = torch.sum(torch.argmax(logits_stop[:,:,:], dim=-1) == targets[:,:,10].long()) / np.prod(targets[:,:,10].shape)
-
-        loss_dict = {
-            "locomotion": loss1.detach().item(), 
-            "arm": loss2.detach().item(), 
-            "pick": loss3.detach().item(), 
-            # "place": loss4.detach().item(),
-            # "accuracy_nav": accuracy1.detach().item(),
-            "accuracy_pick": accuracy3.detach().item(),
-            "accuracy_arm": accuracy2.detach().item(),
-            # "accuracy_place": accuracy4.detach().item(),
-            } 
-        loss1 = torch.exp(-self.loss_vars[0]) * loss1 + self.loss_vars[0]
-        loss2 = torch.exp(-self.loss_vars[1]) * loss2 + self.loss_vars[1]
-        loss3 = torch.exp(-self.loss_vars[2]) * loss3 + self.loss_vars[2]
-        # loss4 = torch.exp(-self.loss_vars[2]) * loss4 + self.loss_vars[2]
-        loss = loss1 + loss2 + loss3 #+ loss4
-
-        return loss, loss_dict
 
 class TransformerResnetNet(nn.Module):
     """Network which passes the input image through CNN and concatenates
@@ -314,8 +227,6 @@ class TransformerResnetNet(nn.Module):
         )  # 6,8
         self.state_encoder = GPT(mconf)
 
-        # self.state_encoder = LSTMBC(mconf)
-
         self.train()
 
     @property
@@ -342,9 +253,9 @@ class TransformerResnetNet(nn.Module):
         masks,
         rnn_build_seq_info=None,
         # targets=None,
-        rtgs=None,
+        # rtgs=None,
         # timesteps=None,
-        offline_training=False
+        # current_context=None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         x = []
@@ -392,15 +303,6 @@ class TransformerResnetNet(nn.Module):
         x = torch.cat(x, dim=1)
         x = x.reshape(B, -1, *x.shape[1:])
 
-        if offline_training:
-            # Move valid state-action-reward pair to the left
-            out = self.state_encoder(
-                x,
-                prev_actions,
-                rtgs=None,
-            )
-            return out
-
         rnn_hidden_states *= masks.view(-1, 1, 1)
 
         current_context = torch.argmax(
@@ -424,4 +326,4 @@ class TransformerResnetNet(nn.Module):
             rtgs=None,
         )
 
-        return out[torch.arange(B), current_context], rnn_hidden_states, {}
+        return out[torch.arange(B), current_context + 1], rnn_hidden_states, {}

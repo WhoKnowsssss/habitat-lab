@@ -79,22 +79,22 @@ def read_dataset(
             # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Pick ====================
-            # if int(filenames[buffer_num][:-3]) <= 50000:
-            #     temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
-            #     temp_start_idxs = np.roll(temp_done_idxs, 1)
-            #     temp_start_idxs[0] = 0
-            #     temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
-            #     temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
-            #     temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
-            #     temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
-            #     temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
-            #     stepwise_idx = np.concatenate([np.arange(temp_nav_phase[i] + 1 , temp_done_idxs[i]) for i in range(temp_nav_phase.shape[0])])
+            if int(filenames[buffer_num][:-3]) <= 50000:
+                temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
+                temp_start_idxs = np.roll(temp_done_idxs, 1)
+                temp_start_idxs[0] = 0
+                temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
+                temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
+                temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
+                temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
+                temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
+                stepwise_idx = np.concatenate([np.arange(temp_nav_phase[i] + 1 , temp_done_idxs[i]) for i in range(temp_nav_phase.shape[0])])
                 
-            #     temp_dones[temp_nav_phase] = False
-            #     temp_obs = np.delete(temp_obs, stepwise_idx, 0)
-            #     temp_actions = np.delete(temp_actions, stepwise_idx, 0)
-            #     temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
-            #     temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+                temp_dones[temp_nav_phase] = False
+                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Place ====================
             # temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
@@ -157,22 +157,23 @@ def read_dataset(
             temp_actions[:,10] = 0
             temp_pick_action = np.stack([temp_obs[i]['is_holding'] for i in range(len(temp_obs))])
             change = temp_pick_action[1:-1] - temp_pick_action[:-2]
-            # if int(filenames[buffer_num][:-3]) > 50000:
-            #     ii = np.where(change < 0)[0]
-            #     ii = [np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii]
-            #     ii = np.concatenate(ii)
-            #     temp_actions[ii,10] = 1
-            # else:
-            #     ii = np.where(change > 0)[0]
-            #     ii = [np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii]
-            #     ii = np.concatenate(ii)
-            #     temp_actions[ii,10] = 2
-            ii = np.where(change < 0)[0]
-            ii = np.concatenate([np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii])
-            temp_actions[ii,10] = 1
-            ii = np.where(change > 0)[0]
-            ii = np.concatenate([np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii])
-            temp_actions[ii,10] = 2
+            if int(filenames[buffer_num][:-3]) < 50000:
+                ii = np.where(change > 0)[0]
+                ii = [np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii]
+                ii = np.concatenate(ii)
+                temp_actions[ii,10] = 2
+            elif int(filenames[buffer_num][:-3]) < 100000:
+                ii = np.where(change < 0)[0]
+                ii = [np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii]
+                ii = np.concatenate(ii)
+                temp_actions[ii,10] = 1
+            else:
+                ii = np.where(change < 0)[0]
+                ii = np.concatenate([np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii])
+                temp_actions[ii,10] = 1
+                ii = np.where(change > 0)[0]
+                ii = np.concatenate([np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii])
+                temp_actions[ii,10] = 2
 
             #==================== Add Noise ========================
             for i in range(len(temp_obs)):

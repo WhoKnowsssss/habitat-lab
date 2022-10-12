@@ -192,6 +192,8 @@ class GPT(nn.Module):
 
         self.apply(self._init_weights)
 
+        self.loss_vars = nn.parameter.Parameter(torch.zeros((3,)))
+
         logger.info(
             "number of parameters: %e",
             sum(p.numel() for p in self.parameters()),
@@ -335,8 +337,7 @@ class GPT(nn.Module):
             actions[:, :, :7] = (
                 torch.bucketize(actions[:, :, :7], self.boundaries) - 1
             ) / 10
-            actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
-            actions[:,:,[10, 11]] = 0
+            # actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
             actions = actions.type(torch.float32)
             # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
             # if actions.shape[-1] == 12:
@@ -359,10 +360,9 @@ class GPT(nn.Module):
 
             # for i in range(len(state_inputs)):
             #     token_embeddings[:,(i+1)::self.num_inputs,:] = state_inputs[i]
-            # token_embeddings[:,1::self.num_inputs,:] = state_inputs[0]
-            # token_embeddings[:,2::self.num_inputs,:] = torch.cat([state_inputs[1], state_inputs[-1]], dim=-1)
-            token_embeddings[:,1::self.num_inputs,:] = torch.cat(
-                [state_inputs[0], state_inputs[-1]], dim=-1
+            token_embeddings[:, 1 :: self.num_inputs, :] = state_inputs[0]
+            token_embeddings[:, 2 :: self.num_inputs, :] = torch.cat(
+                [state_inputs[1], state_inputs[-1]], dim=-1
             )
 
             token_embeddings[
@@ -378,9 +378,11 @@ class GPT(nn.Module):
             actions[:, :, [8, 9]] = self.action_normalization(
                 actions[:, :, [8, 9]]
             )
-            actions[:,:,[10, 11]] = 0
             # actions[:,:,[8,9]] = (torch.bucketize(actions[:,:,[8,9]], self.boundaries) - 1) / 10
             actions = actions.type(torch.float32)
+            # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
+            # if actions.shape[-1] == 12:
+            #     actions = torch.cat([actions[:,:,:10], actions[:,:,11:]], dim=-1)
             action_embeddings = self.action_embeddings(
                 actions
             )  # (batch, block_size, n_embd)
@@ -417,11 +419,55 @@ class GPT(nn.Module):
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
         x = self.ln_f(x)
+        return x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
 
-        if actions is not None and self.model_type == 'reward_conditioned':
-            return x[:, (self.num_inputs - 2) :: (self.num_inputs), :]
-        elif actions is not None and self.model_type == 'bc':
-            return x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
-        else:
-            raise NotImplementedError()
+        # if actions is not None and self.model_type == "reward_conditioned":
+        #     logits_loc = self.head(
+        #         x[:, (self.num_inputs - 2) :: self.num_inputs, :]
+        #     )  # only keep predictions from state_embeddings
+        #     logits_arm = self.head_2(
+        #         x[:, (self.num_inputs - 2) :: self.num_inputs, :]
+        #     )
+        #     logits_pick = self.head_3(
+        #         x[:, (self.num_inputs - 2) :: self.num_inputs, :]
+        #     )
+        #     logits_stop = self.head_4(
+        #         x[:, (self.num_inputs - 2) :: self.num_inputs, :]
+        #     )
+        #     value = self.head_value(
+        #         x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
+        #     )
+        # elif actions is None and self.model_type == "reward_conditioned":
+        #     logits = logits[:, 1:, :]
+        # elif actions is not None and self.model_type == "bc":
+        #     logits_loc = self.head(
+        #         x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
+        #     )  # only keep predictions from state_embeddings
+        #     logits_arm = self.head_2(
+        #         x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
+        #     )
+        #     logits_pick = self.head_3(
+        #         x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
+        #     )
+        #     logits_stop = self.head_4(
+        #         x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
+        #     )
+        #     value = self.head_value(
+        #         x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
+        #     )
+        #     breakpoint()
+        # elif actions is None and self.model_type == "naive":
+        #     logits = logits  # for completeness
+        # else:
+        #     raise NotImplementedError()
 
+        # # if we are given some desired targets also calculate the loss
+        # loss = None
+        # loss_dict = None
+        # # a = (targets[:,:,9].long() + 1 + 2*torch.all(targets[:,:,8:-1].detach()==0,dim=-1))
+        # # print(a[0])
+        # # logits_loc = torch.argmax(logits_loc,dim=-1)
+        # # print(logits_loc[0])
+
+        # logits_loc = self.action_normalization.unnormalize(logits_loc)
+        # return (logits_loc, logits_arm, logits_pick, logits_stop, value)
