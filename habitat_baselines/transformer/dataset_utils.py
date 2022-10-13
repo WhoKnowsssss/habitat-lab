@@ -153,7 +153,7 @@ def read_dataset(
             # stepwise_idx = np.concatenate([np.arange(temp_pick_action[i] , temp_done_idxs[i]) for i in range(temp_pick_action.shape[0])])
             # temp_actions[stepwise_idx, 7] = 0
             
-            temp_actions[:,7] = (temp_actions[:,7] >= 0).astype(np.int64)
+            temp_actions[:,7] = 0
             temp_actions[:,10] = 0
             temp_pick_action = np.stack([temp_obs[i]['is_holding'] for i in range(len(temp_obs))])
             change = temp_pick_action[1:-1] - temp_pick_action[:-2]
@@ -161,19 +161,19 @@ def read_dataset(
                 ii = np.where(change > 0)[0]
                 ii = [np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii]
                 ii = np.concatenate(ii)
-                temp_actions[ii,10] = 2
+                temp_actions[ii,7] = 2
             elif int(filenames[buffer_num][:-3]) < 100000:
                 ii = np.where(change < 0)[0]
                 ii = [np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii]
                 ii = np.concatenate(ii)
-                temp_actions[ii,10] = 1
+                temp_actions[ii,7] = 1
             else:
                 ii = np.where(change < 0)[0]
                 ii = np.concatenate([np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii])
-                temp_actions[ii,10] = 1
+                temp_actions[ii,7] = 1
                 ii = np.where(change > 0)[0]
                 ii = np.concatenate([np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii])
-                temp_actions[ii,10] = 2
+                temp_actions[ii,7] = 2
 
             #==================== Add Noise ========================
             for i in range(len(temp_obs)):

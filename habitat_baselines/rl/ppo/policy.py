@@ -160,6 +160,8 @@ class NetPolicy(nn.Module, Policy):
                 action = distribution.mode()
             elif self.action_distribution_type == "gaussian":
                 action = distribution.mean
+            elif self.action_distribution_type == "mixed":
+                action = distribution.mean()
         else:
             action = distribution.sample()
 

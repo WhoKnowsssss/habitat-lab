@@ -1,7 +1,6 @@
 import math
 import logging
-from turtle import forward
-
+import time
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -176,19 +175,6 @@ class GPT(nn.Module):
 
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
-        self.head = nn.Linear(config.n_embd, 2, bias=False)
-        # self.head = nn.Linear(config.n_embd, 2*11, bias=False)
-        # self.head_2 = nn.Linear(config.n_embd, 8, bias=False)
-        self.head_2 = nn.Linear(config.n_embd, 7 * 11, bias=False)
-
-        self.head_3 = nn.Linear(config.n_embd, 3, bias=False)
-        self.head_4 = nn.Linear(config.n_embd, 2, bias=False)
-        self.head_value = nn.Linear(config.n_embd, 1, bias=False)
-
-        self.action_normalization = ActionNorm(
-            mean=torch.tensor([0.4667095, 0.00209379]),
-            std=torch.tensor([0.61708325, 0.9862876]),
-        ).cuda()
 
         self.apply(self._init_weights)
 
@@ -315,6 +301,7 @@ class GPT(nn.Module):
         # ), "Dimension must match, {}, {}, {}".format(
         #     states.shape[1], actions.shape[1], rtgs.shape[1]
         # )
+        t1 = time.perf_counter()
 
         state_inputs = list(
             torch.split(
@@ -335,7 +322,6 @@ class GPT(nn.Module):
             actions[:, :, :7] = (
                 torch.bucketize(actions[:, :, :7], self.boundaries) - 1
             ) / 10
-            actions[:,:,[8,9]] = self.action_normalization(actions[:,:,[8,9]])
             actions[:,:,[10, 11]] = 0
             actions = actions.type(torch.float32)
             # targets = torch.bucketize(targets[:,:,:], self.boundaries) - 1
@@ -371,20 +357,17 @@ class GPT(nn.Module):
 
 
         elif actions is not None and self.model_type == "bc":
-            actions = torch.clone(actions)
-            actions[:, :, :7] = (
-                torch.bucketize(actions[:, :, :7], self.boundaries) - 1
-            ) / 10
-            actions[:, :, [8, 9]] = self.action_normalization(
-                actions[:, :, [8, 9]]
-            )
-            actions[:,:,[10, 11]] = 0
-            # actions[:,:,[8,9]] = (torch.bucketize(actions[:,:,[8,9]], self.boundaries) - 1) / 10
+            # temp_a = actions[:, :, :7].contiguous()
+            # (
+            #     torch.bucketize(temp_a, self.boundaries) - 1
+            # ) / 10
+            # print("BUCKET", time.perf_counter() - t1, actions[0,0].device)
+            # t1=time.perf_counter()
+            # actions[:,:,[10, 11]] = 0
             actions = actions.type(torch.float32)
             action_embeddings = self.action_embeddings(
                 actions
             )  # (batch, block_size, n_embd)
-
             token_embeddings = torch.zeros(
                 (
                     states.shape[0],
@@ -403,13 +386,14 @@ class GPT(nn.Module):
             token_embeddings[
                 :, (self.num_inputs - 2) :: (self.num_inputs - 1), :
             ] = action_embeddings
-        else:
-            raise NotImplementedError()
 
+        else:
+            raise NotImplementedError
+        
         batch_size = states.shape[0]
-        all_global_pos_emb = torch.repeat_interleave(
-            self.global_pos_emb, batch_size, dim=0
-        )  # batch_size, traj_length, n_embd
+        # all_global_pos_emb = torch.repeat_interleave(
+        #     self.global_pos_emb, batch_size, dim=0
+        # )  # batch_size, traj_length, n_embd
 
         # position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
         position_embeddings = self.pos_emb[:, : token_embeddings.shape[1], :]

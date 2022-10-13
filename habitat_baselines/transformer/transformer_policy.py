@@ -4,7 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 import abc
-from os import times
+import time
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -26,7 +26,7 @@ from habitat.tasks.nav.nav import (
 from habitat_baselines.rl.ddppo.policy.resnet_policy import ResNetEncoder
 from habitat_baselines.rl.ddppo.policy import resnet
 from habitat_baselines.rl.ppo.policy import Policy
-from habitat_baselines.rl.transformer_policy.transformer_model import (
+from habitat_baselines.transformer.transformer_model import (
     GPTConfig,
     GPT,
 )
@@ -40,7 +40,6 @@ from habitat_baselines.rl.ppo import NetPolicy
 from habitat_baselines.common.tensor_dict import TensorDict
 
 from .focal_loss import FocalLoss
-
 
 @baseline_registry.register_policy
 class TransformerResNetPolicy(NetPolicy):
@@ -129,6 +128,63 @@ class TransformerResNetPolicy(NetPolicy):
             fuse_keys=config.TASK_CONFIG.GYM.OBS_KEYS,
         )
 
+    def act(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+        deterministic=False,
+    ):
+        (
+            value,
+            action,
+            action_log_probs,
+            rnn_hidden_states,
+        ) = super().act(
+            observations,
+            rnn_hidden_states,
+            prev_actions,
+            masks,
+            deterministic=deterministic,
+        )
+        if self.action_distribution_type == "mixed":
+            action[:,:7] = self.boundaries_mean[action[:,:7].to(torch.long)]
+            action[:,7] = (action[:,7] == 1).int() \
+                            + 2*(action[:,7] == 0).int() \
+                            + 3*(action[:,7] == 2).int() - 2
+        return (
+            value,
+            action,
+            action_log_probs,
+            rnn_hidden_states,
+        )
+
+    def evaluate_actions(
+        self,
+        observations,
+        rnn_hidden_states,
+        prev_actions,
+        masks,
+        action,
+        rnn_build_seq_info=None,
+        evaluate_aux_losses=True,
+    ):
+        if self.action_distribution_type == "mixed":
+            action[:,:7] = torch.bucketize(action[:,:7], self.boundaries) - 1
+            action[:,7] = (action[:,7] == 0).int() \
+                            + 2*(sampled_action[:,7] == -1).int() \
+                            + 3*(sampled_action[:,7] == 1).int() - 1
+        return super().evaluate_actions(
+            observations,
+            rnn_hidden_states,
+            prev_actions,
+            masks,
+            action,
+            rnn_build_seq_info=rnn_build_seq_info,
+            evaluate_aux_losses=evaluate_aux_losses,
+        )
+
     def forward(
         self,
         states, 
@@ -137,6 +193,7 @@ class TransformerResNetPolicy(NetPolicy):
         rtgs,
         timesteps,
     ):
+        t1 = time.perf_counter()
         features = self.net(states, None, actions, None, rtgs=rtgs, offline_training=True)
         # if we are given some desired targets also calculate the loss
         loss = None
@@ -167,8 +224,8 @@ class TransformerResNetPolicy(NetPolicy):
         accuracy2 = torch.sum(torch.argmax(logits_arm[:,:,:,:], dim=-1) == temp_target[:,:,:7]) / np.prod(temp_target[:,:,:7].shape)
 
         #========================= gripper action ==========================
-        loss3 = self.focal_loss_pick(logits_pick.permute(0,2,1), targets[:,:,10].long())
-        accuracy3 = torch.sum(torch.argmax(logits_pick[:,:,:], dim=-1) == targets[:,:,10].long()) / np.prod(targets[:,:,10].shape)
+        loss3 = self.focal_loss_pick(logits_pick.permute(0,2,1), targets[:,:,7].long())
+        accuracy3 = torch.sum(torch.argmax(logits_pick[:,:,:], dim=-1) == targets[:,:,7].long()) / np.prod(targets[:,:,7].shape)
 
         #========================== stop action ============================
         # loss4 = F.cross_entropy(logits_stop.permute(0,2,1), targets[:,:,10].long(), label_smoothing=0.05)
@@ -189,7 +246,6 @@ class TransformerResNetPolicy(NetPolicy):
         loss3 = torch.exp(-self.loss_vars[2]) * loss3 + self.loss_vars[2]
         # loss4 = torch.exp(-self.loss_vars[2]) * loss4 + self.loss_vars[2]
         loss = loss1 + loss2 + loss3 #+ loss4
-
         return loss, loss_dict
 
 class TransformerResnetNet(nn.Module):
@@ -424,4 +480,11 @@ class TransformerResnetNet(nn.Module):
             rtgs=None,
         )
 
+        # out = self.state_encoder(
+        #     x,
+        #     prev_actions,
+        #     rtgs=None,
+        # )
+
         return out[torch.arange(B), current_context], rnn_hidden_states, {}
+        # return out[torch.arange(B), masks-1], rnn_hidden_states, {}

@@ -93,6 +93,16 @@ class ActionDistribution:
             -1,
         )
 
+    def mean(self):
+        return torch.cat(
+            [
+                dist.mode().to(self.dtype) if isinstance(dist, CustomFixedCategorical)\
+                    else dist.mean
+                for dist in self.distributions
+            ],
+            -1,
+        )
+
     def log_probs(self, action):
         all_log_probs = []
         for dist, _slice, dtype in zip(
