@@ -76,7 +76,7 @@ class TransformerResNetPolicy(NetPolicy):
                 force_blind_policy=force_blind_policy,
                 discrete_actions=False,
                 fuse_keys=[
-                    k for k in fuse_keys if k not in include_visual_keys
+                    k for k in fuse_keys if k not in include_visual_keys and k != 'robot_third_rgb'
                 ],
                 include_visual_keys=include_visual_keys,
             ),
@@ -153,6 +153,8 @@ class TransformerResNetPolicy(NetPolicy):
             action[:,7] = (action[:,7] == 1).int() \
                             + 2*(action[:,7] == 0).int() \
                             + 3*(action[:,7] == 2).int() - 2
+        mask = (torch.norm(observations['obj_goal_sensor'], dim=-1, keepdim=True) < 0.3) * masks
+        action = torch.cat([action, torch.zeros_like(mask.float()), mask.float()], dim=-1)
         return (
             value,
             action,
@@ -224,8 +226,8 @@ class TransformerResNetPolicy(NetPolicy):
         accuracy2 = torch.sum(torch.argmax(logits_arm[:,:,:,:], dim=-1) == temp_target[:,:,:7]) / np.prod(temp_target[:,:,:7].shape)
 
         #========================= gripper action ==========================
-        loss3 = self.focal_loss_pick(logits_pick.permute(0,2,1), targets[:,:,7].long())
-        accuracy3 = torch.sum(torch.argmax(logits_pick[:,:,:], dim=-1) == targets[:,:,7].long()) / np.prod(targets[:,:,7].shape)
+        loss3 = self.focal_loss_pick(logits_pick.permute(0,2,1), targets[:,:,10].long())
+        accuracy3 = torch.sum(torch.argmax(logits_pick[:,:,:], dim=-1) == targets[:,:,10].long()) / np.prod(targets[:,:,10].shape)
 
         #========================== stop action ============================
         # loss4 = F.cross_entropy(logits_stop.permute(0,2,1), targets[:,:,10].long(), label_smoothing=0.05)

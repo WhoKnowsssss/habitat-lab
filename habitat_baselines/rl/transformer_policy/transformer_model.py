@@ -354,13 +354,13 @@ class GPT(nn.Module):
                 :, (self.num_inputs - 1) :: self.num_inputs, :
             ] = action_embeddings
 
-
         elif actions is not None and self.model_type == "bc":
             # temp_a = actions[:, :, :7].contiguous()
-            # (
-            #     torch.bucketize(temp_a, self.boundaries) - 1
-            # ) / 10
-            # actions[:,:,[10, 11]] = 0
+            actions = torch.clone(actions)
+            actions[:, :, :7] = (
+                torch.bucketize(actions[:, :, :7], self.boundaries) - 1
+            ) / 10
+            actions[:,:,[10, 11]] = 0
             actions = actions.type(torch.float32)
             action_embeddings = self.action_embeddings(
                 actions

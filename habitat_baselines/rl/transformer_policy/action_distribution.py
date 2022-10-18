@@ -204,7 +204,7 @@ class MixedDistributionNet(ActionDistributionNet):
         std = torch.exp(std)
         if self.use_softplus:
             std = torch.nn.functional.softplus(std)
-
+            
         return ActionDistribution(self.action_space, self.action_activation, logits, std)
 
 
