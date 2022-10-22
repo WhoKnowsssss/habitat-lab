@@ -24,6 +24,7 @@ def read_dataset(
     actions = []
     done_idxs = []
     stepwise_returns = []
+    separate_dataset = True
 
     path = config.trajectory_dir
     
@@ -79,7 +80,7 @@ def read_dataset(
             # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Pick ====================
-            if int(filenames[buffer_num][:-3]) <= 50000:
+            if int(filenames[buffer_num][:-3]) <= separate_dataset * 50000:
                 temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
                 temp_start_idxs = np.roll(temp_done_idxs, 1)
                 temp_start_idxs[0] = 0
@@ -153,32 +154,36 @@ def read_dataset(
             # stepwise_idx = np.concatenate([np.arange(temp_pick_action[i] , temp_done_idxs[i]) for i in range(temp_pick_action.shape[0])])
             # temp_actions[stepwise_idx, 7] = 0
             
-            temp_actions[:,7] = 0
             temp_actions[:,10] = 0
             temp_pick_action = np.stack([temp_obs[i]['is_holding'] for i in range(len(temp_obs))])
             change = temp_pick_action[1:-1] - temp_pick_action[:-2]
-            if int(filenames[buffer_num][:-3]) < 50000:
+            if int(filenames[buffer_num][:-3]) < separate_dataset * 50000:
                 ii = np.where(change > 0)[0]
                 ii = [np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii]
                 ii = np.concatenate(ii)
-                temp_actions[ii,7] = 2
-            elif int(filenames[buffer_num][:-3]) < 100000:
+                temp_actions[ii,10] = 2
+                for ii in range(len(temp_obs)):
+                    temp_obs[ii]['skill'] = 0
+            elif int(filenames[buffer_num][:-3]) < separate_dataset * 100000:
                 ii = np.where(change < 0)[0]
                 ii = [np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii]
                 ii = np.concatenate(ii)
-                temp_actions[ii,7] = 1
+                temp_actions[ii,10] = 1
+                for ii in range(len(temp_obs)):
+                    temp_obs[ii]['skill'] = 1
             else:
                 ii = np.where(change < 0)[0]
                 ii = np.concatenate([np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii])
-                temp_actions[ii,7] = 1
+                temp_actions[ii,10] = 1
                 ii = np.where(change > 0)[0]
                 ii = np.concatenate([np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii])
-                temp_actions[ii,7] = 2
+                temp_actions[ii,10] = 2
 
             #==================== Add Noise ========================
             for i in range(len(temp_obs)):
                 for k in temp_obs[i].keys():
-                    temp_obs[i][k] += np.random.randn(*temp_obs[i][k].shape).astype(np.float32) * 0.05
+                    if k != 'skill':
+                        temp_obs[i][k] += np.random.randn(*temp_obs[i][k].shape).astype(np.float32) * 0.05
 
             #==================== Simple Filtering =================
             mask = np.all(temp_actions[:,:7] == 0, axis=-1)

@@ -157,17 +157,6 @@ class TransformerTrainer(BaseRLTrainer):
         self.obs_space = observation_space
         self.transformer_policy.to(self.device)
 
-        #TODO: Hack
-        self.config.defrost()
-        self.config.RL.TRANSFORMER.n_layer = 12
-        self.config.RL.TRANSFORMER.context_length = 90
-        self.transformer_policy2 = policy.from_config(
-            self.config, observation_space, self.policy_action_space, 
-        )
-        self.transformer_policy2.to(self.device)
-        self.config.RL.TRANSFORMER.context_length = 30
-        self.config.freeze()
-
 
         if (
             self.config.RL.TRANSFORMER.pretrained_encoder
@@ -183,7 +172,8 @@ class TransformerTrainer(BaseRLTrainer):
                 {
                     k[k.find(prefix) + len(prefix) :]: v
                     for k, v in pretrained_state["state_dict"].items()
-                }
+                },
+                strict=False
             )
         elif self.config.RL.TRANSFORMER.pretrained_encoder:
             prefix = "net.visual_encoder."
@@ -726,9 +716,9 @@ class TransformerTrainer(BaseRLTrainer):
             {
                 k[k.find(prefix) + len(prefix) :]: v
                 for k, v in ckpt_dict["state_dict"].items()
-                if prefix in k and ("action_distri" not in k) and ("critic" not in k)
+                # if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
-            , strict=False
+            , strict=True
         )
 
         observations = self.envs.reset()
@@ -764,6 +754,13 @@ class TransformerTrainer(BaseRLTrainer):
             (self.config.NUM_ENVIRONMENTS), 
             dtype=torch.int64, 
             device=self.device,
+        )
+
+        rnn_hidden_states = torch.zeros(
+            (self.config.NUM_ENVIRONMENTS, 30, 277+12+1),
+            # (self.config.NUM_ENVIRONMENTS, 30, 277+12),
+            device=self.device,
+            dtype=torch.float32,
         )
 
         not_done_masks = torch.zeros(
@@ -802,7 +799,7 @@ class TransformerTrainer(BaseRLTrainer):
         name_list = list(range(10,100,10))
         name_list.reverse()
         # name__ = name_list.pop()
-        name__=50010
+        name__=10000
         try:
             f = os.readlink('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__))
         except:
@@ -821,16 +818,36 @@ class TransformerTrainer(BaseRLTrainer):
         total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
         idxxx=0
         idx22=0
+        idx33 = torch.zeros(
+            self.config.NUM_ENVIRONMENTS,
+            device=self.device,
+            dtype=torch.int,
+        )
         success_rates = {'overall': 0, 'nav_fail': 0, 'pick_fail': 0}
         temp_list = []
-        switched = False
-        reset_start = False
-        reset_done = 0
-        pick_constant = 0
+        # switched = False
+        # reset_start = False
+        # reset_done = 0
+        # pick_constant = 0
+        switched = torch.zeros(
+            self.config.NUM_ENVIRONMENTS,
+            device=self.device,
+            dtype=torch.bool,
+        )
+        reset_done = torch.zeros(
+            self.config.NUM_ENVIRONMENTS,
+            device=self.device,
+            dtype=torch.int,
+        )
+        pick_constant = torch.zeros(
+            self.config.NUM_ENVIRONMENTS,
+            device=self.device,
+            dtype=torch.int,
+        )
 
-        def reset_arm(observations, _initial_delta, reset_done):
+        def reset_arm(observations, reset_done):
             _target = np.array([-4.5006e-01, -1.0793e+00,  9.9812e-02,  9.3535e-01, -1.0398e-03, 1.5730e+00,  5.0038e-03])
-            current_joint_pos = observations["joint"].cpu().numpy().squeeze()
+            current_joint_pos = observations["joint"].cpu().numpy()
             delta = _target - current_joint_pos
 
             # Dividing by max initial delta means that the action will
@@ -847,9 +864,9 @@ class TransformerTrainer(BaseRLTrainer):
                 delta
             ).to(device=action.device, dtype=action.dtype)
 
-            if np.abs(current_joint_pos - _target).max(-1) < 5e-2:
-                reset_done += 1
-                action[..., :7] = 0
+            reset_done = torch.clone(reset_done)
+            mask = np.abs(current_joint_pos - _target).max(-1) < 5e-3
+            reset_done[mask] += 1
 
             return action, reset_done
 
@@ -859,105 +876,128 @@ class TransformerTrainer(BaseRLTrainer):
             and self.envs.num_envs > 0
         ):
             current_episodes = self.envs.current_episodes()
+
+            epids = [j.episode_id for j in current_episodes]
+            # try:
+            #     epid = epids.index('342')
+            #     if switched[epid]:
+            #         for k in batch.keys():
+            #             if 'head' not in k and 'robot_third_rgb' not in k:
+            #                 print(k, ': ', batch[k][epid])
+            #         breakpoint()
+            # except ValueError:
+            #     pass
             with torch.no_grad(): 
-                obs2 = default_collate(self.gt_observations[:idx22 + 1][-30:]) #idx22
-                obs2 = {k: obs2[k].unsqueeze(1).to(self.device) for k in obs2.keys()}
-                # for k in ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint']:
-                #     obs[k] = torch.clone(obs[k]) + torch.zeros_like(obs[k]).uniform_(-0.2,0.2)
-                # print("\n\nbatch_list", len(batch_list))
-                if idxxx > -1:
-                    obs = default_collate(batch_list)
-                else:
-                    obs = obs2
-                # for k in ['obj_goal_sensor', 'obj_goal_gps_compass']: #
-                #     obs[k] = obs2[k]
-                # print({k: obs[k][-1] - obs2[k][-1] })
-                # for k in ['obj_start_sensor', 'obj_start_gps_compass', 'obj_goal_sensor', 'obj_goal_gps_compass', 'relative_resting_position', 'joint', 'is_holding']:
-                #     obs[k] = obs2[k]
-                    # print(k, obs[k][-1], obs2[k][-1])
-                
-                # prev_actions[:,-1,9] = 1
-                logits_loc, logits_arm, logits_pick, logits_stop = self.transformer_policy.act(
-                    {k: obs[k].transpose(1,0) for k in obs.keys()},
-                    prev_actions=prev_actions[:,-len(batch_list):,:],
-                    # prev_actions=self.gt_actions[:idx22+1][-30:].unsqueeze(0).cuda(),
-                    targets=None, 
-                    rtgs=rtgs[:,-len(batch_list):,:], 
-                    timesteps=timesteps,
-                    valid_context=valid_context,
+                obs2 = self.gt_observations[idx22]
+                for k in obs2.keys(): #
+                    obs2[k] = obs2[k].unsqueeze(0).cuda()
+    
+                # value, action, action_log_probs, rnn_hidden_states, = self.transformer_policy.act(
+                #     {k: obs[k].transpose(1,0).view(-1, *obs[k].shape[2:]) for k in obs.keys()},
+                #     None,
+                #     prev_actions[:,-len(batch_list):,:],
+                #     # prev_actions=self.gt_actions[:idx22+1][-30:].unsqueeze(0).cuda(),
+                #     valid_context,
+                #     # targets=None, 
+                #     # rtgs=rtgs[:,-len(batch_list):,:], 
+                #     # timesteps=timesteps,
+                #     # valid_context=valid_context,
+                #     deterministic=True
+                # )
+                batch['skill'] = torch.clone(switched).float()
+                value, action, action_log_probs, rnn_hidden_states, = self.transformer_policy.act(
+                    batch,
+                    # obs2,
+                    rnn_hidden_states,
+                    prev_actions[:,-1,:],
+                    not_done_masks,
                     deterministic=True
                 )
-            # print(idxxx)
-            logits = torch.zeros((1, 12),device=logits_loc.device)
-            # logits[:,:8] = torch.tanh(logits_arm[:,:8])
+                
+            mask = ~torch.any(
+                (rnn_hidden_states.sum(-1) == 0), -1
+            )
+            rnn_hidden_states[mask] = rnn_hidden_states[mask].roll(-1, 1)
+            rnn_hidden_states[mask, -1, :] = 0
             
-            logits_pick[:,[1,2]] *= 1.5
-            if torch.argmax(logits_pick, dim=-1)==1:
-                pick_constant = -1
-            elif torch.argmax(logits_pick, dim=-1)==2:
-                pick_constant = 1
-            elif idx22 < 5:
-                pick_constant = 0
-
-            # if pick_constant == -1 and batch['is_holding'][0] == 1:
-            try:
-                if idx22 > 0 and infos[0]['object_to_goal_distance0'] < 0.3:
-                    logits[:,11] = 1
-            except Exception as e:
-                print(e)
-                pass
-
-            logits[:,7] = pick_constant
-
-            # logits[:,7:8][logits[:,7:8]==0] = -1
-            # logits[:,[8,9]] = logits_loc[:,:]
-            # logits[:,8] = logits_loc == 1
-            # logits[:,9] = logits_loc - 1
-            # logits[:,9:-1][logits[:,9:-1]==2] = 0
-            # logits[:,:8] = 0.
-            # boundaries_mean = torch.tensor([-1.0, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 1.0]).cuda()
+            # actions = torch.zeros((1, 12),device=action.device)
+            actions = action
+            # # logits[:,:8] = torch.tanh(logits_arm[:,:8])
             
-            # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
-            # temp_target = torch.bucketize(self.gt_actions[idxxx][[8,9]].cuda(), boundaries).unsqueeze(0) - 1
-            # accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:], dim=-1) == temp_target[:,:]) / 2
+            # logits_pick[:,[1,2]] *= 1.5
+            pick_constant[action[:,7] == 1] = 1
+            pick_constant[action[:,7] == -1] = -1
+            pick_constant[idx33 < 10] = 0
+            actions[:,7] = pick_constant
+            
+            # elif idx22 < 5:
+            #     pick_constant = 0
 
-            # logits_loc = logits_loc.view(logits_loc.shape[0], 2, 11)
+            # # if pick_constant == -1 and batch['is_holding'][0] == 1:
+            # try:
+            #     if idx22 > 0 and infos[0]['object_to_goal_distance0'] < 0.3:
+            #         logits[:,11] = 1
+            # except Exception as e:
+            #     print(e)
+            #     pass
+            # print(infos[0]['object_to_goal_distance0'], torch.norm(obj_goal_sensor))
+
+            # logits[:,7] = pick_constant
+
+            # # logits[:,7:8][logits[:,7:8]==0] = -1
+            # # logits[:,[8,9]] = logits_loc[:,:]
+            # # logits[:,8] = logits_loc == 1
+            # # logits[:,9] = logits_loc - 1
+            # # logits[:,9:-1][logits[:,9:-1]==2] = 0
+            # # logits[:,:8] = 0.
+            # # boundaries_mean = torch.tensor([-1.0, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 1.0]).cuda()
+            
+            # # boundaries = torch.tensor([-1.1, -0.9, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.9, 1.1]).cuda()
+            # # temp_target = torch.bucketize(self.gt_actions[idxxx][[8,9]].cuda(), boundaries).unsqueeze(0) - 1
+            # # accuracy1 = torch.sum(torch.argmax(logits_loc[:,:,:], dim=-1) == temp_target[:,:]) / 2
+
+            # # logits_loc = logits_loc.view(logits_loc.shape[0], 2, 11)
+            # # boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
+            # # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
+            # # print(torch.softmax(logits_loc, dim=-1))
+            # logits[:,8:10] = logits_loc
+            # # logits[:,8:10] = self.gt_actions[idx22][8:10]
+            # logits_arm = logits_arm.view(logits_arm.shape[0], 7, 11)
             # boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
-            # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
-            # print(torch.softmax(logits_loc, dim=-1))
-            logits[:,8:10] = logits_loc
-            # logits[:,8:10] = self.gt_actions[idx22][8:10]
-            logits_arm = logits_arm.view(logits_arm.shape[0], 7, 11)
-            boundaries_mean = torch.tensor([-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2, 0.4, 0.6, 0.8, 1.0]).cuda()
-            # boundaries_mean = torch.tensor([-0.9071 , -0.6149 , -0.43435, -0.27925, -0.13655,  0.     ,0.13655,  0.27925,  0.43435,  0.6149 ,  0.9071 ]).cuda()
-            temp_list.append(np.concatenate([torch.softmax(logits_arm[0,5], dim=0).cpu().numpy(), boundaries_mean[torch.argmax(logits_arm, dim=-1)][0,5:6].cpu().numpy()]))
-            logits[:,:7] = boundaries_mean[torch.argmax(logits_arm, dim=-1)]
+            # # boundaries_mean = torch.tensor([-0.9071 , -0.6149 , -0.43435, -0.27925, -0.13655,  0.     ,0.13655,  0.27925,  0.43435,  0.6149 ,  0.9071 ]).cuda()
+            # temp_list.append(np.concatenate([torch.softmax(logits_arm[0,5], dim=0).cpu().numpy(), boundaries_mean[torch.argmax(logits_arm, dim=-1)][0,5:6].cpu().numpy()]))
+            # logits[:,:7] = boundaries_mean[torch.argmax(logits_arm, dim=-1)]
 
-            # logits[:,:7] = torch.tanh(logits_arm[:,:7])
-            # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
-            # logits[:,8] = boundaries_mean[torch.argmax(logits_loc[:,:9], dim=-1)]
-            # logits[:,9] = boundaries_mean[torch.argmax(logits_loc[:,9:], dim=-1)]
+            # # logits[:,:7] = torch.tanh(logits_arm[:,:7])
+            # # logits[:,8:10] = boundaries_mean[torch.argmax(logits_loc, dim=-1)]
+            # # logits[:,8] = boundaries_mean[torch.argmax(logits_loc[:,:9], dim=-1)]
+            # # logits[:,9] = boundaries_mean[torch.argmax(logits_loc[:,9:], dim=-1)]
             
-            if torch.any(torch.abs(logits[:,:7]) >= 0.1):
-                logits[:,[8,9]] = 0.
-            actions = logits
+            # if torch.any(torch.abs(logits[:,:7]) >= 0.1):
+            #     logits[:,[8,9]] = 0.
+            # actions = logits
             # if idx22 < 30:
             #     actions[:,:11] = self.gt_actions[idx22,:11]
-            if batch_list[-1]['is_holding'].squeeze() == 1 and not switched: 
-                if not reset_start:
-                    _target = np.array([-4.5006e-01, -1.0793e+00,  9.9812e-02,  9.3535e-01, -1.0398e-03, 1.5730e+00,  5.0038e-03])
-                    current_joint_pos = batch["joint"].cpu().numpy().squeeze()
-                    initial_delta = _target - current_joint_pos
-                    reset_start = True
-                if not reset_done >= 1:
-                    actions, reset_done = reset_arm(batch, initial_delta, reset_done)
-                elif not reset_done >= 100:
-                    actions[:,:7] = 0
-                    actions[:,8:10] = logits_loc
-                    reset_done += 1
-                else:
-                    valid_context[:] = 1
-                    switched = True
+            mask = (batch_list[-1]['is_holding'] == 1).view(-1) & ~switched
+            mask2 = reset_done >= 1
+            mask3 = reset_done >= 100
+            tmp_actions, tmp_reset_done = reset_arm(batch, reset_done)
+            actions[mask & ~mask2,:] = tmp_actions[mask & ~mask2]
+            reset_done[mask & ~mask2] = tmp_reset_done[mask & ~mask2]
+            actions[mask & mask2 & ~mask3,:7] = 0
+            reset_done[mask & mask2 & ~mask3] += 1
+            mask4 = reset_done >= 70#TODO: DELETE HACK
+            actions[mask & mask2 & ~mask3 & ~mask4,8:10] = -0.3#TODO: DELETE HACK
+            actions[mask & mask2 & ~mask3 & mask4,8:10] = 0#TODO: DELETE HACK
+            # valid_context[:] = 1
+            actions[mask, 7] = 0#TODO: DELETE HACK
+            pick_constant[mask] = 1
+            switched[mask & mask3] = True
+            # rnn_hidden_states[mask & mask3, :, :] = 0#TODO: DELETE HACK
+            # actions[mask & mask3] = 0.#TODO: DELETE HACK
+
+            mask = torch.any(action[:,:7] != 0, dim=-1)
+            actions[mask,8:10] = 0.
 
                 # else:
                 #     ckpt_dict = self.load_checkpoint('data/ckpts/nav_place_standalone/ckpt.120.pth', map_location="cpu")
@@ -1021,6 +1061,7 @@ class TransformerTrainer(BaseRLTrainer):
                 total__["actions"].append((self.gt_actions[idxxx].numpy(), actions[0].cpu().numpy()))
                 total__["step"].append(idx22)     
             idx22 += 1
+            idx33 += 1
 
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
@@ -1104,148 +1145,132 @@ class TransformerTrainer(BaseRLTrainer):
                     rtgs[i,-1,0] = self.config.RL.TRANSFORMER.return_to_go
 
 
-                    if self.split == 'eval':
-                        gt_ = np.array([total__["gt_dist"][i] for i in range(len(total__["gt_dist"]))])
-                        policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
-                        plt.figure()
-                        plt.plot(gt_, 'r')
-                        plt.plot(policy, 'b')
-                        wandb.log({"episode_Dist_to_obj": plt}, step=len(stats_episodes))
+                    # if self.split == 'eval':
+                    #     gt_ = np.array([total__["gt_dist"][i] for i in range(len(total__["gt_dist"]))])
+                    #     policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
+                    #     plt.figure()
+                    #     plt.plot(gt_, 'r')
+                    #     plt.plot(policy, 'b')
+                    #     wandb.log({"episode_Dist_to_obj": plt}, step=len(stats_episodes))
 
-                        gt_ = np.array([total__["gt_base_dist"][i] for i in range(len(total__["gt_dist"]))])
-                        policy = np.array([total__["base_dist"][i] for i in range(len(total__["dist"]))])
-                        plt.figure()
-                        plt.plot(gt_, 'r')
-                        plt.plot(policy, 'b')
-                        wandb.log({"episode_Base_dist_to_obj": plt}, step=len(stats_episodes))
+                    #     gt_ = np.array([total__["gt_base_dist"][i] for i in range(len(total__["gt_dist"]))])
+                    #     policy = np.array([total__["base_dist"][i] for i in range(len(total__["dist"]))])
+                    #     plt.figure()
+                    #     plt.plot(gt_, 'r')
+                    #     plt.plot(policy, 'b')
+                    #     wandb.log({"episode_Base_dist_to_obj": plt}, step=len(stats_episodes))
 
-                        gt_ = np.array([total__["actions"][i][0].tolist() for i in range(len(total__["gt_dist"]))])
-                        policy = np.array([total__["actions"][i][1].tolist() for i in range(len(total__["gt_dist"]))])
-                        for j in range(gt_.shape[-1]-1):
-                            plt.figure()
-                            plt.plot(total__["step"], gt_[:,j], 'ro', alpha=0.5, label='Action_{}_gt'.format(j))
-                            plt.plot(total__["step"], policy[:,j], 'b+', alpha=0.5, label='Action_{}_policy'.format(j))
-                            plt.legend()
-                            wandb.log({"episode_Action_{}".format(j): plt}, step=len(stats_episodes))
+                    #     gt_ = np.array([total__["actions"][i][0].tolist() for i in range(len(total__["gt_dist"]))])
+                    #     policy = np.array([total__["actions"][i][1].tolist() for i in range(len(total__["gt_dist"]))])
+                    #     for j in range(gt_.shape[-1]-1):
+                    #         plt.figure()
+                    #         plt.plot(total__["step"], gt_[:,j], 'ro', alpha=0.5, label='Action_{}_gt'.format(j))
+                    #         plt.plot(total__["step"], policy[:,j], 'b+', alpha=0.5, label='Action_{}_policy'.format(j))
+                    #         plt.legend()
+                    #         wandb.log({"episode_Action_{}".format(j): plt}, step=len(stats_episodes))
 
-                        gt_ = np.array([total__["rewards"][i][0] for i in range(len(total__["gt_dist"]))]).reshape(-1)
-                        policy = np.array([total__["rewards"][i][1] for i in range(len(total__["gt_dist"]))])
-                        gt_ = np.array([np.sum(gt_[:i+1]) for i in range(len(gt_))])
-                        policy = np.array([np.sum(policy[:i+1]) for i in range(len(policy))])
-                        plt.figure()
-                        plt.plot(total__["step"], gt_, 'r')
-                        plt.plot(total__["step"], policy, 'b', label='reward')
-                        plt.legend()
-                        wandb.log({"episode_Reward": plt}, step=len(stats_episodes))
-                        if len(gt_) and gt_[-1] > 100:
-                            writer.add_scalars(
-                                "Metrics", 
-                                {"w/ expert success": episode_stats['composite_success']},
-                                len(stats_episodes)
-                            )
+                    #     gt_ = np.array([total__["rewards"][i][0] for i in range(len(total__["gt_dist"]))]).reshape(-1)
+                    #     policy = np.array([total__["rewards"][i][1] for i in range(len(total__["gt_dist"]))])
+                    #     gt_ = np.array([np.sum(gt_[:i+1]) for i in range(len(gt_))])
+                    #     policy = np.array([np.sum(policy[:i+1]) for i in range(len(policy))])
+                    #     plt.figure()
+                    #     plt.plot(total__["step"], gt_, 'r')
+                    #     plt.plot(total__["step"], policy, 'b', label='reward')
+                    #     plt.legend()
+                    #     wandb.log({"episode_Reward": plt}, step=len(stats_episodes))
+                    #     if len(gt_) and gt_[-1] > 100:
+                    #         writer.add_scalars(
+                    #             "Metrics", 
+                    #             {"w/ expert success": episode_stats['composite_success']},
+                    #             len(stats_episodes)
+                    #         )
 
-                        # gt_ = np.array([total__["obs"][i] for i in range(len(total__["gt_dist"]))]).squeeze()
-                        # plt.figure()
-                        # plt.plot(total__["step"], gt_)
-                        # wandb.log({"episode_Obs": plt}, step=len(stats_episodes))
+                    #     # gt_ = np.array([total__["obs"][i] for i in range(len(total__["gt_dist"]))]).squeeze()
+                    #     # plt.figure()
+                    #     # plt.plot(total__["step"], gt_)
+                    #     # wandb.log({"episode_Obs": plt}, step=len(stats_episodes))
 
-                    else:
-                        policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
-                        plt.figure()
-                        plt.plot(np.arange(len(policy)), policy, 'b')
-                        wandb.log({"episode_Dist_to_obj": plt}, step=len(stats_episodes))
+                    # else:
+                    #     policy = np.array([total__["dist"][i] for i in range(len(total__["dist"]))])
+                    #     plt.figure()
+                    #     plt.plot(np.arange(len(policy)), policy, 'b')
+                    #     wandb.log({"episode_Dist_to_obj": plt}, step=len(stats_episodes))
 
-                        policy = np.array([total__["base_dist"][i] for i in range(len(total__["dist"]))])
-                        plt.figure()
-                        plt.plot(np.arange(len(policy)), policy, 'b')
-                        wandb.log({"episode_Base_dist_to_obj": plt}, step=len(stats_episodes))
+                    #     policy = np.array([total__["base_dist"][i] for i in range(len(total__["dist"]))])
+                    #     plt.figure()
+                    #     plt.plot(np.arange(len(policy)), policy, 'b')
+                    #     wandb.log({"episode_Base_dist_to_obj": plt}, step=len(stats_episodes))
 
-                    writer.add_scalars(
-                        "Metrics", 
-                        {"Nav_Reward": total__["nav_reward"]},
-                        len(stats_episodes)
-                    )
+                    # writer.add_scalars(
+                    #     "Metrics", 
+                    #     {"Nav_Reward": total__["nav_reward"]},
+                    #     len(stats_episodes)
+                    # )
 
-                    writer.add_scalars(
-                        "Metrics", 
-                        {"Pick_Reward": total__["pick_reward"]},
-                        len(stats_episodes)
-                    )
+                    # writer.add_scalars(
+                    #     "Metrics", 
+                    #     {"Pick_Reward": total__["pick_reward"]},
+                    #     len(stats_episodes)
+                    # )
 
-                    writer.add_scalars(
-                        "Metrics", 
-                        {"Overall_Reward": total__["pick_reward"] + total__["nav_reward"]},
-                        len(stats_episodes)
-                    )
+                    # writer.add_scalars(
+                    #     "Metrics", 
+                    #     {"Overall_Reward": total__["pick_reward"] + total__["nav_reward"]},
+                    #     len(stats_episodes)
+                    # )
 
-                    if episode_stats['composite_success']:
-                        success_rates["overall"] += 1
-                    else:
-                        if min([total__["base_dist"][i][0] for i in range(len(total__["dist"]))]) > 1.0:
-                            success_rates["nav_fail"] += 1
-                        elif min([total__["dist"][i] for i in range(len(total__["dist"]))]) > 0.15:
-                            success_rates["pick_fail"] += 1
+                    # if episode_stats['composite_success']:
+                    #     success_rates["overall"] += 1
+                    # else:
+                    #     if min([total__["base_dist"][i][0] for i in range(len(total__["dist"]))]) > 1.0:
+                    #         success_rates["nav_fail"] += 1
+                    #     elif min([total__["dist"][i] for i in range(len(total__["dist"]))]) > 0.15:
+                    #         success_rates["pick_fail"] += 1
                     
-                    writer.add_scalars(
-                        "Metrics", 
-                        {"Overall Success" :success_rates["overall"] / len(stats_episodes)},
-                        len(stats_episodes)
-                    )
+                    # writer.add_scalars(
+                    #     "Metrics", 
+                    #     {"Overall Success" :success_rates["overall"] / len(stats_episodes)},
+                    #     len(stats_episodes)
+                    # )
 
-                    if (len(stats_episodes) - success_rates["overall"] ) != 0:
-                        writer.add_scalars(
-                            "Metrics", 
-                            {"Pick Fail Rate" :success_rates["pick_fail"] / (len(stats_episodes) - success_rates["overall"] )},
-                            len(stats_episodes)
-                        )
+                    # if (len(stats_episodes) - success_rates["overall"] ) != 0:
+                    #     writer.add_scalars(
+                    #         "Metrics", 
+                    #         {"Pick Fail Rate" :success_rates["pick_fail"] / (len(stats_episodes) - success_rates["overall"] )},
+                    #         len(stats_episodes)
+                    #     )
 
-                        writer.add_scalars(
-                            "Metrics", 
-                            {"Nav Fail Rate" :success_rates["nav_fail"] / (len(stats_episodes) - success_rates["overall"] )},
-                            len(stats_episodes)
-                        )
+                    #     writer.add_scalars(
+                    #         "Metrics", 
+                    #         {"Nav Fail Rate" :success_rates["nav_fail"] / (len(stats_episodes) - success_rates["overall"] )},
+                    #         len(stats_episodes)
+                    #     )
 
-                        writer.add_scalars(
-                            "Metrics", 
-                            {"Other Fail Rate" :(len(stats_episodes) - success_rates["overall"] - success_rates["nav_fail"] - success_rates["pick_fail"]) / (len(stats_episodes) - success_rates["overall"] )},
-                            len(stats_episodes)
-                        )
+                    #     writer.add_scalars(
+                    #         "Metrics", 
+                    #         {"Other Fail Rate" :(len(stats_episodes) - success_rates["overall"] - success_rates["nav_fail"] - success_rates["pick_fail"]) / (len(stats_episodes) - success_rates["overall"] )},
+                    #         len(stats_episodes)
+                    #     )
 
-                    total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
+                    # total__ = {'obs':[], 'rewards':[],'actions':[], 'step':[], 'dist':[], 'gt_dist':[], 'base_dist':[], 'gt_base_dist':[], 'nav_reward':0, 'pick_reward':0}
                     idx22=0
+                    idx33[i] = 0
                     batch_list = [batch]
                     prev_actions[:] = 0
 
-                    temp_list = np.array(temp_list)
+                    # temp_list = np.array(temp_list)
                     
-                    for nd in range(11):
-                        plt.plot(temp_list[:,nd], label=f"{nd}")
-                    plt.plot(temp_list[:,-1], 'ro', label="actual_action")
-                    plt.legend()
-                    plt.savefig(self.config.VIDEO_DIR + '/{}_'.format(len(stats_episodes)) + current_episodes[i].episode_id + '.png')
+                    # for nd in range(11):
+                    #     plt.plot(temp_list[:,nd], label=f"{nd}")
+                    # plt.plot(temp_list[:,-1], 'ro', label="actual_action")
+                    # plt.legend()
+                    # plt.savefig(self.config.VIDEO_DIR + '/{}_'.format(len(stats_episodes)) + current_episodes[i].episode_id + '.png')
 
-                    temp_list = []
+                    # temp_list = []
 
-                    if switched:
-                        pass
-                        # ckpt_dict = self.load_checkpoint(checkpoint_path, map_location="cpu")
-                        # prefix= ''
-                        # if any(["module." in k for k in ckpt_dict["state_dict"].keys()]):
-                        #     prefix = "module."
-                        
-                        # self.transformer_policy.load_state_dict(
-                        #     {
-                        #         k[k.find(prefix) + len(prefix) :]: v
-                        #         for k, v in ckpt_dict["state_dict"].items()
-                        #         if prefix in k and ("action_distri" not in k) and ("critic" not in k)
-                        #     }
-                        #     , strict=False
-                        # )
-                        # self.transformer_policy = self.policy_backup
-                    switched = False
-                    reset_done = 0
-                    reset_start = False
-                    pick_constant = 0
+                    switched[i] = False
+                    reset_done[i] = 0
+                    pick_constant[i] = 0
 
                     # if not next_episodes[i].episode_id in self.gt_episodes:
                     #     name__ = name_list.pop()
@@ -1285,9 +1310,6 @@ class TransformerTrainer(BaseRLTrainer):
                     for k, v in aggregated_stats.items():
                         logger.info(f"Average episode {k}: {v:.4f}")
 
-                    if len(stats_episodes) == 50:
-                        raise Exception
-
                     
 
                 # episode continues
@@ -1296,19 +1318,19 @@ class TransformerTrainer(BaseRLTrainer):
                     frame = observations_to_image(
                         {k: v[i] for k, v in batch.items()}, infos[i]
                     )
-                    logits_pick_prob = torch.softmax(logits_pick, dim=-1)
-                    logits_place_prob = torch.softmax(logits_stop, dim=-1)
+                    # logits_pick_prob = torch.softmax(logits_pick, dim=-1)
+                    # logits_place_prob = torch.softmax(logits_stop, dim=-1)
                     more_infos = dict(
                         obj_start_gps_compass=observations[i]['obj_start_gps_compass'].tolist()[0], 
-                        place_policy = switched, 
+                        place_policy = switched[i].item(), 
                         obj_start_gps_compass_angle=observations[i]['obj_start_gps_compass'].tolist()[1], 
                         obj_goal_gps_compass=observations[i]['obj_goal_gps_compass'].tolist()[0],
                         obj_goal_gps_compass_angle=observations[i]['obj_goal_gps_compass'].tolist()[1],
                         # pick_action0=logits_pick[i,0].item(),
-                        pick_action0=logits_pick_prob[i,0].item(),
-                        pick_action1=logits_pick_prob[i,1].item(),
-                        pick_action2=logits_pick_prob[i,2].item(),
-                        pick_action=pick_constant,
+                        # pick_action0=logits_pick_prob[i,0].item(),
+                        # pick_action1=logits_pick_prob[i,1].item(),
+                        # pick_action2=logits_pick_prob[i,2].item(),
+                        pick_action=pick_constant[i].item(),
                         obj_goal_sensor=np.linalg.norm(observations[i]['obj_goal_sensor']),
                         reward=current_episode_reward[i].item(),
                         )

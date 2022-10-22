@@ -155,6 +155,8 @@ class TransformerResNetPolicy(NetPolicy):
                             + 3*(action[:,7] == 2).int() - 2
         mask = (torch.norm(observations['obj_goal_sensor'], dim=-1, keepdim=True) < 0.3) * masks
         action = torch.cat([action, torch.zeros_like(mask.float()), mask.float()], dim=-1)
+        # mask = torch.any(action[:,:7] != 0, dim=-1)
+        # action[mask,8:10] = 0.
         return (
             value,
             action,
@@ -196,7 +198,7 @@ class TransformerResNetPolicy(NetPolicy):
         timesteps,
     ):
         t1 = time.perf_counter()
-        features = self.net(states, None, actions, None, rtgs=rtgs, offline_training=True)
+        features, planner_logits = self.net(states, None, actions, None, rtgs=rtgs, offline_training=True)
         # if we are given some desired targets also calculate the loss
         loss = None
         loss_dict = None
@@ -232,6 +234,10 @@ class TransformerResNetPolicy(NetPolicy):
         #========================== stop action ============================
         # loss4 = F.cross_entropy(logits_stop.permute(0,2,1), targets[:,:,10].long(), label_smoothing=0.05)
         # accuracy4 = torch.sum(torch.argmax(logits_stop[:,:,:], dim=-1) == targets[:,:,10].long()) / np.prod(targets[:,:,10].shape)
+
+        #========================== planner action ============================
+        # loss_p = F.cross_entropy(planner_logits.permute(0,2,1), targets[:,:,11].long(), label_smoothing=0.05)
+        # accuracy_p = torch.sum(torch.argmax(planner_logits[:,:,:], dim=-1) == targets[:,:,11].long()) / np.prod(targets[:,:,11].shape)
 
         loss_dict = {
             "locomotion": loss1.detach().item(), 
@@ -369,8 +375,25 @@ class TransformerResnetNet(nn.Module):
             n_embd=self._hidden_size,
             model_type=model_type,
             max_timestep=max_episode_step,
+            num_skills=10
         )  # 6,8
         self.state_encoder = GPT(mconf)
+
+        mconf = GPTConfig(
+            num_actions,
+            context_length,
+            num_states=[
+                (0 if self.is_blind else self._hidden_size // 2),
+                rnn_input_size,
+            ],
+            n_layer=3,
+            n_head=4,
+            n_embd=self._hidden_size,
+            model_type=model_type,
+            max_timestep=max_episode_step,
+            num_skills=10
+        )  # 6,8
+        # self.planner_encoder = GPT(mconf)
 
         # self.state_encoder = LSTMBC(mconf)
 
@@ -447,6 +470,10 @@ class TransformerResnetNet(nn.Module):
             )
             x.append(fuse_states)
 
+        if 'skill' in observations.keys():
+            # assert offline_training, "shouldn't include this in online training or evaluation"
+            x.append(observations['skill'].unsqueeze(-1))
+
         x = torch.cat(x, dim=1)
         x = x.reshape(B, -1, *x.shape[1:])
 
@@ -457,14 +484,19 @@ class TransformerResnetNet(nn.Module):
                 prev_actions,
                 rtgs=None,
             )
-            return out
-
+            # out2 = self.planner_encoder(x)
+            out2 = None
+            return out, out2
+        
         rnn_hidden_states *= masks.view(-1, 1, 1)
 
         current_context = torch.argmax(
             (rnn_hidden_states.sum(-1) == 0).float(), -1
         )
         action_dim = self._num_actions
+
+        # out = self.planner_encoder(x)
+        # x = torch.cat([x, torch.argmax(out[torch.arange(B), current_context], dim=-1)], dim=-1)
 
         # Write obs to context
         rnn_hidden_states[
