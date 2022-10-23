@@ -1000,6 +1000,47 @@ class PPOTrainer(BaseRLTrainer):
 
         pbar = tqdm.tqdm(total=number_of_eval_episodes * evals_per_ep)
         self.actor_critic.eval()
+
+        os.makedirs(self.config.DATASET_SAVE_PATH, exist_ok=True)
+
+        def flush_episodes():
+            save_path = os.path.join(
+                self.config.DATASET_SAVE_PATH, f"{saved_num_episodes}.pt"
+            )
+            torch.save(
+                {
+                    "obs": all_obs,
+                    "rewards": all_rewards,
+                    "masks": all_masks,
+                    "actions": all_actions,
+                    "infos": all_infos,
+                },
+                save_path,
+            )
+            print(f"Flushed to {save_path}")
+
+        def get_save_obs(batch):
+            if self.config.DATASET_SAVE_VISUAL_ENCODED:
+                return self.actor_critic.net.visual_encoder(batch)
+            else:
+                return batch
+
+        all_obs = []
+        all_rewards = []
+        all_masks = []
+        all_actions = []
+        all_infos = []
+
+        buffer_obs = defaultdict(list)
+        buffer_rewards = defaultdict(list)
+        buffer_masks = defaultdict(list)
+        buffer_actions = defaultdict(list)
+        buffer_infos = defaultdict(list)
+        saved_num_episodes = 0
+
+        visual_batch = get_save_obs(batch)
+        for i in range(self.envs.num_envs):
+            buffer_obs[i].append(visual_batch[i])
         while (
             len(stats_episodes) < (number_of_eval_episodes * evals_per_ep)
             and self.envs.num_envs > 0
@@ -1007,6 +1048,7 @@ class PPOTrainer(BaseRLTrainer):
             current_episodes_info = self.envs.current_episodes()
 
             with inference_mode():
+                # breakpoint()
                 (
                     _,
                     actions,
@@ -1061,7 +1103,19 @@ class PPOTrainer(BaseRLTrainer):
             next_episodes_info = self.envs.current_episodes()
             envs_to_pause = []
             n_envs = self.envs.num_envs
+
+            visual_batch = get_save_obs(batch)
+
             for i in range(n_envs):
+                # Add the step to the buffer
+                buffer_obs[i].append(visual_batch[i])
+                buffer_rewards[i].append(rewards[i])
+                buffer_masks[i].append(not_done_masks[i])
+                buffer_actions[i].append(actions[i])
+                buffer_infos[i].append(
+                    {"episode": next_episodes_info[i].episode_id, "success": False}
+                )
+
                 if (
                     ep_eval_count[
                         (
@@ -1090,6 +1144,40 @@ class PPOTrainer(BaseRLTrainer):
 
                 # episode ended
                 if not not_done_masks[i].item():
+                    # Flush buffer to the final dataset
+                    all_obs.extend(
+                        [
+                            {k: v for k, v in obs.items()}
+                            for obs in buffer_obs[i][:-1]
+                        ]
+                    )
+                    for idx in range(len(buffer_infos[i])):
+                        buffer_infos[i][idx]["success"] = infos[i][
+                            "composite_success"
+                        ]
+                    all_rewards.extend(buffer_rewards[i])
+                    all_masks.extend(buffer_masks[i])
+                    all_actions.extend(buffer_actions[i])
+                    all_infos.extend(buffer_infos[i])
+                    saved_num_episodes += 1
+
+                    buffer_obs[i] = buffer_obs[i][-1:]
+                    buffer_rewards[i] = []
+                    buffer_masks[i] = []
+                    buffer_actions[i] = []
+                    buffer_infos[i] = []
+
+                    if (
+                        saved_num_episodes % self.config.DATASET_SAVE_INTERVAL
+                        == 0
+                    ):
+                        flush_episodes()
+                        all_obs = []
+                        all_rewards = []
+                        all_masks = []
+                        all_actions = []
+                        all_infos = []
+
                     pbar.update()
                     episode_stats = {
                         "reward": current_episode_reward[i].item()
@@ -1128,6 +1216,17 @@ class PPOTrainer(BaseRLTrainer):
                             self.config.TASK_CONFIG.TASK,
                             current_episodes_info[i].episode_id,
                         )
+
+                    aggregated_stats = {}
+                    for stat_key in next(iter(stats_episodes.values())).keys():
+                        aggregated_stats[stat_key] = np.mean(
+                            [v[stat_key] for v in stats_episodes.values()]
+                        )
+
+                    for k, v in aggregated_stats.items():
+                        logger.info(f"Average episode {k}: {v:.4f}")
+
+                    print('\n\nSuccess Rate: ', aggregated_stats['composite_success'], '\n\n')
 
             not_done_masks = not_done_masks.to(device=self.device)
             (

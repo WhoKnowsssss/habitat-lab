@@ -115,25 +115,39 @@ class NnSkillPolicy(SkillPolicy):
         cur_batch_idx,
         deterministic=False,
     ):
-        filtered_obs = self._get_filtered_obs(observations, cur_batch_idx)
+        try:
+            filtered_obs = self._get_filtered_obs(observations, cur_batch_idx)
 
-        filtered_prev_actions = prev_actions[
-            :, self._ac_start : self._ac_start + self._ac_len
-        ]
-        filtered_obs = self._select_obs(filtered_obs, cur_batch_idx)
+            filtered_prev_actions = prev_actions[
+                :, self._ac_start : self._ac_start + self._ac_len
+            ]
+            filtered_obs = self._select_obs(filtered_obs, cur_batch_idx)
+            _, action, _, rnn_hidden_states = self._wrap_policy.act(
+                filtered_obs,
+                rnn_hidden_states,
+                filtered_prev_actions,
+                masks,
+                deterministic,
+            )
+        except Exception as e:
+            print(e)
+            breakpoint()
+        try:
+            full_action = torch.zeros(prev_actions.shape, device=masks.device)
+            full_action[:, self._ac_start : self._ac_start + self._ac_len] = action
+        except Exception as e:
+            print(e)
+            breakpoint()
+        # print(self._did_want_done, full_action, cur_batch_idx, self._stop_action_idx)
+        # if len(cur_batch_idx) == 1 and cur_batch_idx[0] != 0:
+        #     breakpoint()
+        try:
+            self._did_want_done[cur_batch_idx] = full_action[
+                :, self._stop_action_idx
+            ]
+        except:
+            breakpoint()
 
-        _, action, _, rnn_hidden_states = self._wrap_policy.act(
-            filtered_obs,
-            rnn_hidden_states,
-            filtered_prev_actions,
-            masks,
-            deterministic,
-        )
-        full_action = torch.zeros(prev_actions.shape, device=masks.device)
-        full_action[:, self._ac_start : self._ac_start + self._ac_len] = action
-        self._did_want_done[cur_batch_idx] = full_action[
-            cur_batch_idx, self._stop_action_idx
-        ]
         return full_action, rnn_hidden_states
 
     @classmethod

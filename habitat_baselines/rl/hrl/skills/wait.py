@@ -24,7 +24,7 @@ class WaitSkillPolicy(SkillPolicy):
         self, observations, rnn_hidden_states, prev_actions, masks, batch_idx
     ) -> torch.BoolTensor:
         assert self._wait_time > 0
-        return self._cur_skill_step >= self._wait_time
+        return self._cur_skill_step[batch_idx] >= self._wait_time
 
     def _internal_act(
         self,

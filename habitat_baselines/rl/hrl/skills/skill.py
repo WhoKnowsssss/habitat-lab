@@ -97,12 +97,12 @@ class SkillPolicy(Policy):
             )
 
         bad_terminate = torch.zeros(
-            self._cur_skill_step.shape,
+            self._cur_skill_step[batch_idx].shape,
             device=self._cur_skill_step.device,
             dtype=torch.bool,
         )
         if self._config.MAX_SKILL_STEPS > 0:
-            over_max_len = self._cur_skill_step > self._config.MAX_SKILL_STEPS
+            over_max_len = self._cur_skill_step[batch_idx] > self._config.MAX_SKILL_STEPS
             if self._config.FORCE_END_ON_TIMEOUT:
                 if over_max_len.sum() > 0.0:
                     print(f"Over max with {self._cur_skill_step}")
@@ -158,14 +158,18 @@ class SkillPolicy(Policy):
         :returns: Predicted action and next rnn hidden state.
         """
         self._cur_skill_step[cur_batch_idx] += 1
-        action, hxs = self._internal_act(
-            observations,
-            rnn_hidden_states,
-            prev_actions,
-            masks,
-            cur_batch_idx,
-            deterministic,
-        )
+        try:
+            action, hxs = self._internal_act(
+                observations,
+                rnn_hidden_states,
+                prev_actions,
+                masks,
+                cur_batch_idx,
+                deterministic,
+            )
+        except Exception as e:
+            print(e)
+            breakpoint()
 
         if self._should_keep_hold_state:
             action = self._keep_holding_state(action, observations)

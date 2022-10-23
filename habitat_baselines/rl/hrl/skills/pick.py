@@ -46,13 +46,17 @@ class PickSkillPolicy(NnSkillPolicy):
         cur_batch_idx,
         deterministic=False,
     ):
-        action, hxs = super()._internal_act(
-            observations,
-            rnn_hidden_states,
-            prev_actions,
-            masks,
-            cur_batch_idx,
-            deterministic,
-        )
+        try:
+            action, hxs = super()._internal_act(
+                observations,
+                rnn_hidden_states,
+                prev_actions,
+                masks,
+                cur_batch_idx,
+                deterministic,
+            )
+        except Exception as e:
+            print(e)
+            breakpoint()
         action = self._mask_pick(action, observations)
         return action, hxs

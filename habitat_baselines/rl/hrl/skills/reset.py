@@ -76,13 +76,14 @@ class ResetArmSkill(SkillPolicy):
         # always in [-1,1] and has the benefit of reducing the delta
         # amount was we converge to the target.
         delta = delta / np.maximum(
-            self._initial_delta.max(-1, keepdims=True), 1e-5
+            self._initial_delta[cur_batch_idx].max(-1, keepdims=True), 1e-5
         )
 
+        # breakpoint()
         action = torch.zeros_like(prev_actions)
-
         action[..., self._ac_start : self._ac_start + 7] = torch.from_numpy(
             delta
         ).to(device=action.device, dtype=action.dtype)
+
 
         return action, rnn_hidden_states
