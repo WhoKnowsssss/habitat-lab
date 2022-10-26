@@ -11,6 +11,7 @@ import torch
 from gym import spaces
 from torch import device, nn as nn
 import torch.nn.functional as F
+import torchvision
 import numpy as np
 
 from habitat.config import Config
@@ -443,6 +444,8 @@ class TransformerResnetNet(nn.Module):
                 # visual_feats = self.visual_encoder_rgb(observations)
                 # visual_feats = self.visual_fc_rgb(visual_feats)
                 # x.append(visual_feats)
+                observations['robot_head_depth'] = torchvision.transforms.functional.resize( \
+                                observations['robot_head_depth'].permute(0,3,1,2), 128).permute(0,2,3,1)
                 visual_feats = self.visual_encoder(observations)
                 visual_feats = self.visual_fc(visual_feats)
                 x.append(visual_feats)

@@ -163,7 +163,7 @@ class GPT(nn.Module):
             torch.zeros(1, config.block_size, config.n_embd)
         )
         self.skill_embedding = nn.Parameter(
-            torch.randn(config.num_skills, config.n_embd)
+            torch.randn(config.num_skills, config.n_embd) #HACK//2 for obs123
         )
         self.drop = nn.Dropout(config.embd_pdrop)
 
@@ -373,31 +373,54 @@ class GPT(nn.Module):
             action_embeddings = self.action_embeddings(
                 actions
             )  # (batch, block_size, n_embd)
-            token_embeddings = torch.zeros(
-                (
-                    states.shape[0],
-                    (self.num_inputs - 1) * states.shape[1],
-                    self.config.n_embd,
-                ),
-                dtype=torch.float32,
-                device=action_embeddings.device,
-            )
+            
+            if skill_set is not None:
+                token_embeddings = torch.zeros(
+                    (
+                        states.shape[0],
+                        (self.num_inputs) * states.shape[1],
+                        self.config.n_embd,
+                    ),
+                    dtype=torch.float32,
+                    device=action_embeddings.device,
+                )
+                token_embeddings[:,  :: (self.num_inputs), :] = self.skill_embedding[skill_set.long()].repeat(1,1,1,1).view(skill_set.shape[0],-1,self.config.n_embd)
+                token_embeddings[:, 1 :: (self.num_inputs), :] = torch.cat(
+                    [state_inputs[0], state_inputs[-1]], dim=-1
+                )
+
+                token_embeddings[
+                    :, (self.num_inputs - 1) :: (self.num_inputs), :
+                ] = action_embeddings
+            else:
+                raise NotImplementedError 
+            # token_embeddings = torch.zeros(
+            #     (
+            #         states.shape[0],
+            #         (self.num_inputs - 1) * states.shape[1],
+            #         self.config.n_embd,
+            #     ),
+            #     dtype=torch.float32,
+            #     device=action_embeddings.device,
+            # )
+
+            # if skill_set is not None: #obs123
+            #     skill_embeddings = self.skill_embedding[skill_set.long()].repeat(1,1,1,1).view(skill_set.shape[0],-1,self.config.n_embd//2)
+            #     state_inputs[-1] = state_inputs[-1] + skill_embeddings
 
             # token_embeddings[:,::(self.num_inputs-1),:] = state_inputs[0]
-            token_embeddings[:, :: (self.num_inputs - 1), :] = torch.cat(
-                [state_inputs[0], state_inputs[-1]], dim=-1
-            )
+            # token_embeddings[:, :: (self.num_inputs - 1), :] = torch.cat(
+            #     [state_inputs[0], state_inputs[-1]], dim=-1
+            # )
 
-            token_embeddings[
-                :, (self.num_inputs - 2) :: (self.num_inputs - 1), :
-            ] = action_embeddings
+            # token_embeddings[
+            #     :, (self.num_inputs - 2) :: (self.num_inputs - 1), :
+            # ] = action_embeddings
 
-            if skill_set is not None:
-                # skill_embeddings = self.skill_embedding[skill_set.long()].repeat(1,1,2,1).view(skill_set.shape[0],-1,self.config.n_embd)
-                skill_embeddings = self.skill_embedding[skill_set.long()].reshape(skill_set.shape[0],-1,self.config.n_embd)
+            # if skill_set is not None: #obs
+            #     # skill_embeddings = self.skill_embedding[skill_set.long()].repeat(1,1,2,1).view(skill_set.shape[0],-1,self.config.n_embd)
+            #     skill_embeddings = self.skill_embedding[skill_set.long()].repeat(1,1,1,1).view(skill_set.shape[0],-1,self.config.n_embd)
 
-        else:
-            raise NotImplementedError
         
         batch_size = states.shape[0]
         # all_global_pos_emb = torch.repeat_interleave(
@@ -406,9 +429,9 @@ class GPT(nn.Module):
 
         # position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
         position_embeddings = self.pos_emb[:, : token_embeddings.shape[1], :]
-        if skill_set is not None:
-            # position_embeddings = position_embeddings + skill_embeddings
-            token_embeddings[:,::2] = token_embeddings[:,::2] + skill_embeddings
+        # if skill_set is not None:#obs
+        #     # position_embeddings = position_embeddings + skill_embeddings
+        #     token_embeddings[:,::2] = token_embeddings[:,::2] + skill_embeddings
 
 
         x = self.drop(token_embeddings + position_embeddings)
@@ -418,6 +441,8 @@ class GPT(nn.Module):
         if actions is not None and self.model_type == 'reward_conditioned':
             return x[:, (self.num_inputs - 2) :: (self.num_inputs), :]
         elif actions is not None and self.model_type == 'bc':
+            # if skill_set is not None: 
+            #     return x[:, 1 :: (self.num_inputs), :] #HACK obsatt
             return x[:, (self.num_inputs - 3) :: (self.num_inputs - 1), :]
         else:
             raise NotImplementedError()

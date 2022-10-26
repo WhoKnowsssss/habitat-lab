@@ -718,7 +718,7 @@ class TransformerTrainer(BaseRLTrainer):
                 for k, v in ckpt_dict["state_dict"].items()
                 # if prefix in k and ("action_distri" not in k) and ("critic" not in k)
             }
-            , strict=True
+            , strict=False
         )
 
         observations = self.envs.reset()
@@ -991,7 +991,7 @@ class TransformerTrainer(BaseRLTrainer):
             actions[mask & mask2 & ~mask3 & mask4,8:10] = 0#TODO: DELETE HACK
             # valid_context[:] = 1
             actions[mask, 7] = 0#TODO: DELETE HACK
-            pick_constant[mask] = 1
+            pick_constant[mask] = 1#TODO: DELETE HACK
             switched[mask & mask3] = True
             # rnn_hidden_states[mask & mask3, :, :] = 0#TODO: DELETE HACK
             # actions[mask & mask3] = 0.#TODO: DELETE HACK
