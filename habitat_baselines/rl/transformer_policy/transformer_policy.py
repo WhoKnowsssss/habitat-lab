@@ -79,6 +79,7 @@ class TransformerResNetPolicy(NetPolicy):
                     k for k in fuse_keys if k not in include_visual_keys and k != 'robot_third_rgb'
                 ],
                 include_visual_keys=include_visual_keys,
+                use_rgb=policy_config.use_rgb,
             ),
             action_space=action_space,
             policy_config=policy_config,
@@ -271,6 +272,7 @@ class TransformerResnetNet(nn.Module):
         discrete_actions: bool = True,
         fuse_keys: Optional[List[str]] = None,
         include_visual_keys: Optional[List[str]] = None,
+        use_rgb = False
     ):
         super().__init__()
         self.context_length = context_length
@@ -310,12 +312,15 @@ class TransformerResnetNet(nn.Module):
         else:
             use_obs_space = observation_space
 
-        # self.visual_encoder_rgb = ResNetEncoder(
-        #     use_obs_space,
-        #     baseplanes=resnet_baseplanes,
-        #     ngroups=resnet_baseplanes // 2,
-        #     make_backbone=getattr(resnet, backbone),
-        # )
+        if use_rgb:
+            self.visual_encoder_rgb = ResNetEncoder(
+                use_obs_space,
+                baseplanes=resnet_baseplanes,
+                ngroups=resnet_baseplanes // 2,
+                make_backbone=getattr(resnet, backbone),
+            )
+        else:
+            self.visual_encoder_rgb = None
 
         if force_blind_policy:
             use_obs_space = spaces.Dict({})
@@ -341,20 +346,29 @@ class TransformerResnetNet(nn.Module):
         )
 
         if not self.visual_encoder.is_blind:
-            # self.visual_fc_rgb = nn.Sequential(
-            #     nn.Flatten(),
-            #     nn.Linear(
-            #         np.prod(self.visual_encoder.output_shape), hidden_size//2
-            #     ),
-            #     nn.ReLU(True),
-            # )
-            self.visual_fc = nn.Sequential(
+            if use_rgb:
+                self.visual_fc_rgb = nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(
+                        np.prod(self.visual_encoder.output_shape), hidden_size//2
+                    ),
+                    nn.ReLU(True),
+                )
+                self.visual_fc = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(
-                    np.prod(self.visual_encoder.output_shape), hidden_size // 2
+                    np.prod(self.visual_encoder.output_shape), hidden_size
                 ),
                 nn.ReLU(True),
             )
+            else:
+                self.visual_fc = nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(
+                        np.prod(self.visual_encoder.output_shape), hidden_size // 2
+                    ),
+                    nn.ReLU(True),
+                )
         self._hxs_dim = (self._hidden_size // 2) + rnn_input_size + num_actions
         self._num_actions = num_actions
         mconf = GPTConfig(
@@ -423,9 +437,10 @@ class TransformerResnetNet(nn.Module):
                 visual_feats = self.visual_encoder(observations)
                 visual_feats = self.visual_fc(visual_feats)
                 x.append(visual_feats)
-                # visual_feats = self.visual_encoder_rgb(observations)
-                # visual_feats = self.visual_fc_rgb(visual_feats)
-                # x.append(visual_feats)
+                if self.visual_encoder_rgb is not None:
+                    visual_feats = self.visual_encoder_rgb(observations)
+                    visual_feats = self.visual_fc_rgb(visual_feats)
+                    x.append(visual_feats)
 
         if self._fuse_keys is not None:
             # observations["obj_start_gps_compass"] = torch.stack(

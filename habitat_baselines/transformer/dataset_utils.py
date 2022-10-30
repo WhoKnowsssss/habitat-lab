@@ -24,7 +24,12 @@ def read_dataset(
     actions = []
     done_idxs = []
     stepwise_returns = []
-    separate_dataset = True
+    separate_dataset = False
+    sequential_to_separate = False
+    if separate_dataset:
+        sequential_to_separate = False
+    if sequential_to_separate:
+        separate_dataset = True
 
     path = config.trajectory_dir
     
@@ -65,12 +70,19 @@ def read_dataset(
             temp_dones = torch.cat(dataset_raw["masks"]).numpy()
             temp_infos = np.array([v["success"] for v in dataset_raw["infos"]])
 
-            if len(temp_actions) == len(temp_obs):
-                temp_actions[:-1,[8,9]] = np.stack([temp_obs[i]['oracle_nav_executed_action'] for i in range(len(temp_obs))])[1:]
+            if 'oracle_nav_executed_action' in temp_obs[0].keys():
+                if len(temp_actions) == len(temp_obs):
+                    temp_actions[:-1,[8,9]] = np.stack([temp_obs[i]['oracle_nav_executed_action'] for i in range(len(temp_obs))])[1:]
+                else:
+                    temp_actions[:,[8,9]] = np.stack([temp_obs[i]['oracle_nav_executed_action'] for i in range(len(temp_obs))])[1:]
+                    temp_obs = temp_obs[:-1]
             else:
-                temp_actions[:,[8,9]] = np.stack([temp_obs[i]['oracle_nav_executed_action'] for i in range(len(temp_obs))])[1:]
-                temp_obs = temp_obs[:-1]
+                temp_actions = np.concatenate([temp_actions, np.zeros((temp_actions.shape[0], 1))], axis=-1)
             temp_actions[:,11] = 0
+
+            file_num = int(filenames[buffer_num][:-3])
+            if sequential_to_separate and not file_num > 100000:
+                file_num = np.random.randint(10, 5000)
             #==================== Only Arm Action Phase ===================
             # stepwise_idx = np.argwhere(np.all(temp_actions[:,8:10] == 0, axis=-1) & temp_dones == True).squeeze()
 
@@ -80,7 +92,7 @@ def read_dataset(
             # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Pick ====================
-            if int(filenames[buffer_num][:-3]) <= separate_dataset * 50000:
+            if file_num <= separate_dataset * 5000:
                 temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
                 temp_start_idxs = np.roll(temp_done_idxs, 1)
                 temp_start_idxs[0] = 0
@@ -98,21 +110,22 @@ def read_dataset(
                 temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             #===================== Only Nav Place ====================
-            # temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
-            # temp_start_idxs = np.roll(temp_done_idxs, 1)
-            # temp_start_idxs[0] = 0
-            # temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
-            # temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
-            # temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
-            # temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
-            # temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
-            # stepwise_idx = np.concatenate([np.arange(temp_start_idxs[i], temp_nav_phase[i]) for i in range(temp_nav_phase.shape[0])])
-            
-            # temp_dones[temp_nav_phase] = False
-            # temp_obs = np.delete(temp_obs, stepwise_idx, 0)
-            # temp_actions = np.delete(temp_actions, stepwise_idx, 0)
-            # temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
-            # temp_dones = np.delete(temp_dones, stepwise_idx, 0)
+            elif sequential_to_separate:
+                temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
+                temp_start_idxs = np.roll(temp_done_idxs, 1)
+                temp_start_idxs[0] = 0
+                temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
+                temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
+                temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
+                temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
+                temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
+                stepwise_idx = np.concatenate([np.arange(temp_start_idxs[i], temp_nav_phase[i]) for i in range(temp_nav_phase.shape[0])])
+                
+                temp_dones[temp_nav_phase] = False
+                temp_obs = np.delete(temp_obs, stepwise_idx, 0)
+                temp_actions = np.delete(temp_actions, stepwise_idx, 0)
+                temp_stepwise_returns = np.delete(temp_stepwise_returns, stepwise_idx, 0)
+                temp_dones = np.delete(temp_dones, stepwise_idx, 0)
 
             
             #==================== Only Successful Episodes ===================
@@ -157,20 +170,20 @@ def read_dataset(
             temp_actions[:,10] = 0
             temp_pick_action = np.stack([temp_obs[i]['is_holding'] for i in range(len(temp_obs))])
             change = temp_pick_action[1:-1] - temp_pick_action[:-2]
-            if int(filenames[buffer_num][:-3]) < separate_dataset * 50000:
+            if file_num <= separate_dataset * 5000:
                 ii = np.where(change > 0)[0]
                 ii = [np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii]
                 ii = np.concatenate(ii)
                 temp_actions[ii,10] = 2
                 for ii in range(len(temp_obs)):
-                    temp_obs[ii]['skill'] = 0
-            elif int(filenames[buffer_num][:-3]) < separate_dataset * 100000:
+                    temp_obs[ii]['skill'] = 1 #HACK SHOULD BE 0
+            elif file_num <= separate_dataset * 10000 or file_num >= 100000: #<= separate_dataset * 10000
                 ii = np.where(change < 0)[0]
                 ii = [np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii]
                 ii = np.concatenate(ii)
                 temp_actions[ii,10] = 1
                 for ii in range(len(temp_obs)):
-                    temp_obs[ii]['skill'] = 1
+                    temp_obs[ii]['skill'] = 0 #HACK SHOULD BE 1
             else:
                 ii = np.where(change < 0)[0]
                 ii = np.concatenate([np.arange(iii, min(iii+20, len(temp_actions)-1)) for iii in ii])
@@ -178,6 +191,22 @@ def read_dataset(
                 ii = np.where(change > 0)[0]
                 ii = np.concatenate([np.arange(iii-20, min(iii+30, len(temp_actions)-1)) for iii in ii])
                 temp_actions[ii,10] = 2
+                
+                temp_done_idxs = np.argwhere(temp_dones == False).reshape(-1) + 1
+                temp_start_idxs = np.roll(temp_done_idxs, 1)
+                temp_start_idxs[0] = 0
+                temp_nav_phase = np.all(temp_actions[:,:7] == 0, axis=-1).astype(np.int8)
+                temp_nav_phase = np.nonzero((temp_nav_phase[1:] - temp_nav_phase[:-1]) > 0)[0]
+                temp_nav_phase = np.concatenate([temp_nav_phase, temp_done_idxs[-1:]-1])
+                temp_nav_place_idx = np.searchsorted(temp_nav_phase, temp_start_idxs, side='left')
+                temp_nav_phase = temp_nav_phase[temp_nav_place_idx].reshape(-1)
+                stepwise_idx = np.concatenate([np.arange(temp_nav_phase[i] + 1 , temp_done_idxs[i]) for i in range(temp_nav_phase.shape[0])])
+                for ii in range(len(temp_obs)):
+                    if ii in stepwise_idx:
+                        temp_obs[ii]['skill'] = 0 # HACK 0 for contd checkpoint
+                    else:
+                        temp_obs[ii]['skill'] = 1
+                
 
             #==================== Add Noise ========================
             for i in range(len(temp_obs)):
@@ -207,7 +236,9 @@ def read_dataset(
     stepwise_returns = np.concatenate(stepwise_returns)
     done_idxs = np.concatenate(done_idxs)
 
-    rtg, timesteps = _timesteps_rtg(done_idxs, stepwise_returns)
+    # rtg, timesteps = _timesteps_rtg(done_idxs, stepwise_returns)
+    rtg = np.zeros_like(stepwise_returns, dtype=np.float32)
+    timesteps = np.zeros(len(stepwise_returns), dtype=np.int64)
 
     if verbose:
         logger.info(
@@ -247,7 +278,7 @@ def producer(
     context_length: int = 30
 ):
     while True:
-        if len(deque) < 1:
+        if len(deque) < 2:
             import time
             s = time.time_ns()//1000000
             deque.append(read_dataset(config, verbose, rng, context_length))

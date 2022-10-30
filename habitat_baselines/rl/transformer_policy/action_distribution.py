@@ -190,7 +190,6 @@ class MixedDistributionNet(ActionDistributionNet):
     def forward(self, x, return_logits=False) -> ActionDistribution:
 
         logits = self.linear(x)
-
         if return_logits:
             return logits
 

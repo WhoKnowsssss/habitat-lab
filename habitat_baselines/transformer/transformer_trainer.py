@@ -759,6 +759,7 @@ class TransformerTrainer(BaseRLTrainer):
         rnn_hidden_states = torch.zeros(
             (self.config.NUM_ENVIRONMENTS, 30, 277+12+1),
             # (self.config.NUM_ENVIRONMENTS, 30, 277+12),
+            # (self.config.NUM_ENVIRONMENTS, 30, 512+277+12+1),
             device=self.device,
             dtype=torch.float32,
         )
@@ -799,7 +800,7 @@ class TransformerTrainer(BaseRLTrainer):
         name_list = list(range(10,100,10))
         name_list.reverse()
         # name__ = name_list.pop()
-        name__=10000
+        name__=10
         try:
             f = os.readlink('{}/{}.pt'.format(self.config.RL.TRAJECTORY_DATASET.trajectory_dir, name__))
         except:
@@ -807,10 +808,11 @@ class TransformerTrainer(BaseRLTrainer):
         gt = torch.load(f, map_location=torch.device('cpu'))
         self.gt_observations = gt["obs"]
         self.gt_actions = torch.stack(gt["actions"])[:,:12]
-        if len(self.gt_actions) == len(self.gt_observations):
-            self.gt_actions[:-1,[8,9]] = torch.stack([self.gt_observations[i]['oracle_nav_executed_action'] for i in range(len(self.gt_observations))])[1:]
-        else:
-            self.gt_actions[:,[8,9]] = torch.stack([self.gt_observations[i]['oracle_nav_executed_action'] for i in range(len(self.gt_observations))])[1:]
+        if 'oracle_nav_executed_action' in self.gt_observations[0].keys():
+            if len(self.gt_actions) == len(self.gt_observations):
+                self.gt_actions[:-1,[8,9]] = torch.stack([self.gt_observations[i]['oracle_nav_executed_action'] for i in range(len(self.gt_observations))])[1:]
+            else:
+                self.gt_actions[:,[8,9]] = torch.stack([self.gt_observations[i]['oracle_nav_executed_action'] for i in range(len(self.gt_observations))])[1:]
         self.gt_reward = gt["rewards"]
         self.gt_infos = gt["infos"]
         self.gt_episodes = [self.gt_infos[i]["episode"] for i in range(len(self.gt_infos)-1)]
@@ -888,7 +890,7 @@ class TransformerTrainer(BaseRLTrainer):
             # except ValueError:
             #     pass
             with torch.no_grad(): 
-                obs2 = self.gt_observations[idx22]
+                obs2 = self.gt_observations[idx22+100]
                 for k in obs2.keys(): #
                     obs2[k] = obs2[k].unsqueeze(0).cuda()
     
@@ -904,7 +906,8 @@ class TransformerTrainer(BaseRLTrainer):
                 #     # valid_context=valid_context,
                 #     deterministic=True
                 # )
-                batch['skill'] = torch.clone(switched).float()
+                batch['skill'] = torch.clone(~switched).float()
+                obs2['skill'] = torch.clone(~switched).float()
                 value, action, action_log_probs, rnn_hidden_states, = self.transformer_policy.act(
                     batch,
                     # obs2,
@@ -927,7 +930,8 @@ class TransformerTrainer(BaseRLTrainer):
             # logits_pick[:,[1,2]] *= 1.5
             pick_constant[action[:,7] == 1] = 1
             pick_constant[action[:,7] == -1] = -1
-            pick_constant[idx33 < 10] = 0
+            pick_constant[idx33 < 20] = -1
+            actions[idx33 < 10,:7] = 0
             actions[:,7] = pick_constant
             
             # elif idx22 < 5:
@@ -980,24 +984,24 @@ class TransformerTrainer(BaseRLTrainer):
             #     actions[:,:11] = self.gt_actions[idx22,:11]
             mask = (batch_list[-1]['is_holding'] == 1).view(-1) & ~switched
             mask2 = reset_done >= 1
-            mask3 = reset_done >= 100
+            mask3 = reset_done >= 30
             tmp_actions, tmp_reset_done = reset_arm(batch, reset_done)
             actions[mask & ~mask2,:] = tmp_actions[mask & ~mask2]
             reset_done[mask & ~mask2] = tmp_reset_done[mask & ~mask2]
             actions[mask & mask2 & ~mask3,:7] = 0
             reset_done[mask & mask2 & ~mask3] += 1
-            mask4 = reset_done >= 70#TODO: DELETE HACK
+            mask4 = reset_done >= 1 #TODO: DELETE HACK
             actions[mask & mask2 & ~mask3 & ~mask4,8:10] = -0.3#TODO: DELETE HACK
             actions[mask & mask2 & ~mask3 & mask4,8:10] = 0#TODO: DELETE HACK
             # valid_context[:] = 1
-            actions[mask, 7] = 0#TODO: DELETE HACK
+            actions[mask, 7] = 1#TODO: DELETE HACK
             pick_constant[mask] = 1#TODO: DELETE HACK
             switched[mask & mask3] = True
             # rnn_hidden_states[mask & mask3, :, :] = 0#TODO: DELETE HACK
             # actions[mask & mask3] = 0.#TODO: DELETE HACK
 
-            mask = torch.any(action[:,:7] != 0, dim=-1)
-            actions[mask,8:10] = 0.
+            # mask = torch.any(action[:,:7] != 0, dim=-1)
+            # actions[mask,8:10] = 0.
 
                 # else:
                 #     ckpt_dict = self.load_checkpoint('data/ckpts/nav_place_standalone/ckpt.120.pth', map_location="cpu")
@@ -1270,7 +1274,7 @@ class TransformerTrainer(BaseRLTrainer):
 
                     switched[i] = False
                     reset_done[i] = 0
-                    pick_constant[i] = 0
+                    pick_constant[i] = -1
 
                     # if not next_episodes[i].episode_id in self.gt_episodes:
                     #     name__ = name_list.pop()

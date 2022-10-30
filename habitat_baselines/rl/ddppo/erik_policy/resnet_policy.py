@@ -75,7 +75,6 @@ class ErikPointNavResNetPolicy(NetPolicy):
             fuse_keys = []
 
         super().__init__(
-            aux_loss_config,
             PointNavResNetNet(
                 observation_space=observation_space,
                 action_space=action_space,  # for previous action
@@ -91,6 +90,8 @@ class ErikPointNavResNetPolicy(NetPolicy):
             ),
             action_space,
             policy_config=policy_config,
+            aux_loss_config=aux_loss_config,
+
         )
 
     @classmethod
@@ -162,7 +163,7 @@ class ResNetEncoder(nn.Module):
                 #     mock_input = F.avg_pool2d(mock_input, 2)
 
                 mock_output = self.backbone(mock_input)
-
+                
                 (
                     _,
                     final_channels,

@@ -169,7 +169,7 @@ class RollingDataset(IterableDataset):
                 #     self.dataset_context['num_iterated'] = 0
                 #     for i in range(self.num_workers+1):
                 #         self.dataset_context['need_init_{}'.format(i)] = True
-                print(self.id, "stoped! ", self.num_iterated_epoch, len(self.queue))
+                print(self.id, "stopped! ", self.num_iterated_epoch, len(self.queue))
                     
                 raise StopIteration
 
